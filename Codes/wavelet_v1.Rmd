@@ -1,0 +1,670 @@
+---
+title: "wavelet angle test"
+author: "Moeka"
+date: "2024-03-06"
+output: html_document
+---
+wavelet analysis: chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj/http://www.hs-stat.com/projects/WaveletComp/WaveletComp_guided_tour.pdf
+
+- would it be better after deciding the period when thinking about the range??
+- Normalization
+All time series should be normalized to have zero mean and unit variance prior to wavelet analysis.  
+
+- Gaps
+Missing values in all the variables should be padded with zeros.
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(WaveletComp)
+library(lubridate)
+library(dplyr)
+library(ggplot2)
+```
+
+
+```{r read a df}
+setwd("G:/My Drive/Research/Projects/DC_auto/Data")
+
+# read the dataframe - check the CRK_cont_SR_qaqc.Rmd for the quqa steps
+SR_tower <- 
+  read.csv("CRK_SR_tower_combined.csv", header = T) %>%
+  mutate(Datetime_hr_CST = as_datetime(Datetime_hr_CST, tz = "Etc/GMT+6"))
+
+```
+
+- Only SR
+- Spr22: End of Apr - 2022-05-22 10:00:00
+- Fall22: Mid Aug - Beginning of Oct 
+* 1 week gap in the end of August
+- Grow23: 2023-03-10 ~ 2023-08-27 20:00:00 
+
+
+- SR & Rh
+- Spring 22 (M1-2): 2022-05-22 11:00:00 ~ 2022-06-09 15:00:00
+- Winter 22: End of Nov (1 week)
+- Spring 23: Mid March - Beginning of Apr
+- Spring 23-2: the half of May
+- Spring 23-3 Mid May to Mid June
+- Winter 24: Mid Feb to Mid Mar
+
+```{r Extract the period of study}
+
+extract_period <- function(START, END){
+  df <-
+    SR_tower %>%
+    filter(Datetime_hr_CST > START & Datetime_hr_CST < END) %>%
+    rename(date = Datetime_hr_CST) # let wc analysis recognize the date column
+  return(df)
+}
+
+
+SR_grow23 <- 
+  SR_tower %>%
+  filter(Datetime_hr_CST > "2023-03-10" & Datetime_hr_CST < "2023-8-27 20:00:00") 
+
+# 2022
+
+SR_Rh_Spr22 <- extract_period("2022-05-22 11:00:00", "2022-06-09 16:00:00")
+SR_Rh_Wnt22 <- extract_period("2022-11-23 12:00:00", "2022-11-30 17:00:00") # only a week
+
+# 2023
+SR_Rh_Spr23 <- extract_period("2023-03-15", "2023-04-01") # Rh missing periodically
+SR_Rh_Spr23_2 <- extract_period("2023-05-23", "2023-06-07") # Rh missing periodically
+
+# 2024
+SR_Rh_Wnt24 <- extract_period("2024-02-20 13:00:00", "2024-03-09 16:00:00")
+
+```
+
+```{r Prep before the wavelet analysis}
+# normalize with 0 mean and unit variance - use scale()
+
+# for cross wavelet analysis with Morlet function (continuous) 
+scale_pad <- function(df){
+  df %>%
+    mutate(across(where(is.numeric), scale)) %>% 
+    mutate(across(where(is.numeric), ~replace(., is.na(.), 0)))
+}
+
+
+# for cross wavelet analysis with Harr function (discrete)
+
+```
+
+
+```{r croass wavelet - continuous}
+
+coh <- function(df, var1, var2, upper){
+  analyze.coherency(df, my.pair = c(var1, var2),
+                          loess.span = 0,     ## no detrending required
+                          dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                          dj = 1/100,         ## resolution along period axis
+                          lowerPeriod = 1/4,  ## 6 hour
+                          upperPeriod = upper,  ## 128 days
+                          make.pval = T,      ## check for significance
+                          n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+}
+
+# function to generate a cross-wavelet power spectrum
+wc_img <- function(df, title){
+  dev.new(width=6,height=5,noRStudioGD = TRUE)
+  wc.image(df,
+         legend.params = list(lab = "cross-wavelet power levels", # axis label
+                              lab.line = 1.5, # distance between bar label and axis label
+                              mar = 5), 
+         lvl = 0.3,
+         timelab = "Hour",
+         periodlab = "period (days)",
+         main = title)
+}
+
+# function to analyze and plot them all 
+# not recommended for a longer period of term 
+
+# does not work well when assign an object name..
+# want to make a timestamp x axis
+wc_summary <- function(df, resp_var){
+  
+  wc_results <- list()
+  
+  # wc result
+  wc_results[["PAR"]] <- coh(scale_pad(df), resp_var, "PPFD_IN_1_1_1", 128)
+  wc_results[["Ts"]] <- coh(scale_pad(df), resp_var,"TS_1_1_1", 128)
+  wc_results[["SWC"]] <- coh(scale_pad(df), resp_var, "SWC_1_1_1", 128)
+  wc_results[["gs"]] <- coh(scale_pad(df), resp_var, "gs_qaqc", 128)
+
+    return(wc_results)
+  }
+
+# this will generate all 4 plots one by one
+wc_img_gen <- function(df, resp_var){
+ # par(mar=c(2,2,1.5,0.3)+0.1)
+  par(plt = c(0.1, 0.95, 0.1, 0.95))
+  wc_img(df[["PAR"]], paste0(resp_var, " vs PAR"))
+  wc_img(df[["Ts"]], paste0(resp_var, " vs Ts"))
+  wc_img(df[["SWC"]], paste0(resp_var, " vs SWC"))
+  wc_img(df[["gs"]], paste0(resp_var, " vs gc"))
+
+}
+
+wc_time_img <- function(df, resp_var){
+  # place 4 figs in a row
+  par(plt = c(0.1, 0.95, 0.15, 0.95))
+  par(mfrow=c(1,4))
+  
+  plot(24*df[["PAR"]]$Angle[201, ]/(2*pi), main = paste0(resp_var, " vs PAR"), ylab = "Hours", cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+  plot(24*df[["Ts"]]$Angle[201, ]/(2*pi), main = paste0(resp_var, " vs Ts"), ylab = "Hours", cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+  plot(24*df[["SWC"]]$Angle[201, ]/(2*pi), main = paste0(resp_var, " vs SWC"), ylab = "Hours", cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+  plot(24*df[["gs"]]$Angle[201, ]/(2*pi), main = paste0(resp_var, " vs gc"), ylab = "Hours", cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+ 
+  # reset
+  par(mfrow=c(1,1))
+}
+
+
+
+
+
+
+```
+
+
+```{r temp function}
+# gc has not been calculated for 2024
+# functions for only this reason
+wc_summary_temp <- function(df, resp_var){
+  
+  wc_results <- list()
+  
+  # wc result
+  wc_results[["PAR"]] <- coh(scale_pad(df), resp_var, "PPFD_IN_1_1_1", 128)
+  wc_results[["Ts"]] <- coh(scale_pad(df), resp_var,"TS_1_1_1", 128)
+  wc_results[["SWC"]] <- coh(scale_pad(df), resp_var, "SWC_1_1_1", 128)
+
+    return(wc_results)
+  }
+
+# this will generate all 4 plots one by one
+wc_img_gen_temp <- function(df, resp_var){
+ # par(mar=c(2,2,1.5,0.3)+0.1)
+  
+  wc_img(df[["PAR"]], paste0(resp_var, " vs PAR"))
+  wc_img(df[["Ts"]], paste0(resp_var, " vs Ts"))
+  wc_img(df[["SWC"]], paste0(resp_var, " vs SWC"))
+
+}
+
+wc_time_img_temp <- function(df, resp_var){
+  # place 4 figs in a row
+  par(plt = c(0.1, 0.95, 0.05, 0.95))
+  par(mfrow=c(1,3))
+  
+  plot(24*df[["PAR"]]$Angle[201, ]/(2*pi), main = paste0(resp_var, " vs PAR"), ylab = "Hours", cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+  plot(24*df[["Ts"]]$Angle[201, ]/(2*pi), main = paste0(resp_var, " vs Ts"), ylab = "Hours", cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+  plot(24*df[["SWC"]]$Angle[201, ]/(2*pi), main = paste0(resp_var, " vs SWC"), ylab = "Hours", cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+ 
+  # reset
+  par(mfrow=c(1,1))
+}
+
+```
+
+```{r application}
+### Spr22
+
+# SR
+wc_SR_Spr22 <- wc_summary(SR_Rh_Spr22, "SR1")
+wc_img_gen(wc_SR_Spr22, "SR")
+wc_time_img(wc_SR_Spr22, "SR")
+
+# Rh
+wc_Rh_Spr22 <- wc_summary(SR_Rh_Spr22, "Rh")
+wc_img_gen(wc_Rh_Spr22, "Rh")
+wc_time_img(wc_Rh_Spr22, "Rh")
+
+# Ra
+wc_Ra_Spr22 <- wc_summary(SR_Rh_Spr22, "Ra1")
+wc_img_gen(wc_Ra_Spr22, "Ra")
+wc_time_img(wc_Ra_Spr22, "Ra")
+
+
+### Wnt22
+
+# SR
+wc_SR_Wnt22 <- wc_summary(SR_Rh_Wnt22, "SR1")
+wc_img_gen(wc_SR_Wnt22, "SR")
+wc_time_img(wc_SR_Wnt22, "SR")
+
+# Rh
+wc_Rh_Wnt22 <- wc_summary(SR_Rh_Wnt22, "Rh")
+wc_img_gen(wc_Rh_Wnt22, "Rh")
+wc_time_img(wc_Rh_Wnt22, "Rh")
+
+# Ra
+wc_Ra_Wnt22 <- wc_summary(SR_Rh_Wnt22, "Ra1")
+wc_img_gen(wc_Ra_Wnt22, "Ra")
+wc_time_img(wc_Ra_Wnt22, "Ra")
+
+
+
+
+
+### winter 24
+
+# SR
+wc_SR_Wnt24 <- wc_summary_temp(SR_Rh_Wnt24, "SR1")
+wc_img_gen_temp(wc_SR_Wnt24, "SR")
+wc_time_img_temp(wc_SR_Wnt24, "SR")
+
+# Rh
+wc_Rh_Wnt24 <- wc_summary_temp(SR_Rh_Wnt24, "Rh")
+wc_img_gen_temp(wc_Rh_Wnt24, "Rh")
+wc_time_img_temp(wc_Rh_Wnt24, "Rh")
+
+# Ra
+wc_Ra_Wnt24 <- wc_summary_temp(SR_Rh_Wnt24, "Ra1")
+wc_img_gen_temp(wc_Ra_Wnt24, "Ra")
+wc_time_img_temp(wc_Ra_Wnt24, "Ra")
+
+# Ts vs PAR
+wc_Ts_PAR_Wnt24 <- coh(scale_pad(SR_Rh_Wnt24), "TS_1_1_1", "PPFD_IN_1_1_1", 128)
+wc_img(wc_Ts_PAR_Wnt24, "Ts vs PAR")
+plot(24*wc_Ts_PAR_Wnt24$Angle[201, ]/(2*pi), main = "Ts vs PAR", ylab = "Hours", cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+```
+
+```{r CWA only SR}
+# for SR 2023
+SR_grow23_SR_PAR <- coh(scale_pad(SR_grow23), "SR1", "PPFD_IN_1_1_1", 128)
+SR_grow23_SR_Ts <- coh(scale_pad(SR_grow23), "SR1","TS_1_1_1", 128)
+SR_grow23_SR_SWC <- coh(scale_pad(SR_grow23), "SR1", "SWC_1_1_1", 128)
+SR_grow23_SR_gs <- coh(scale_pad(SR_grow23), "SR1", "gs_qaqc", 128)
+
+
+
+
+
+
+# for SR 2024
+SR24_SR_PAR <- coh(xwt_SR_Rh24, "SR_filled", "PPFD_1_1_1", 128)
+SR24_SR_Ts <- coh(xwt_SR_Rh24, "SR_filled", "Ts_1_1_1", 128)
+SR24_SR_SWC <- coh(xwt_SR_Rh24, "SR_filled", "SWC_1_1_1", 128)
+
+# for Ra 2024
+SR24_Ra_PAR <- coh(xwt_SR_Rh24, "Ra_imp", "PPFD_1_1_1", 128)
+SR24_Ra_Ts <- coh(xwt_SR_Rh24, "Ra_imp", "Ts_1_1_1", 128)
+SR24_Ra_SWC <- coh(xwt_SR_Rh24, "Ra_imp", "SWC_1_1_1", 128)
+
+# for Rh 2024
+SR24_Rh_PAR <- coh(xwt_SR_Rh24, "Rh_filled", "PPFD_1_1_1", 128)
+SR24_Rh_Ts <- coh(xwt_SR_Rh24, "Rh_filled", "Ts_1_1_1", 128)
+SR24_Rh_SWC <- coh(xwt_SR_Rh24, "Rh_filled", "SWC_1_1_1", 128)
+
+
+# for SR 2022
+SR_may22_SR_PAR <- coh(xwt_SR_Rhmay22, "SR_filled", "PPFD_IN_1_1_1", 128)
+SR_may22_SR_Ts <- coh(xwt_SR_Rhmay22, "SR_filled", "TS_1_1_1", 128)
+SR_may22_SR_SWC <- coh(xwt_SR_Rhmay22, "SR_filled", "SWC_1_1_1", 128)
+
+# for Ra 2022
+SR24_Ra_PAR <- coh(xwt_SR_Rh24, "Ra_imp", "PPFD_1_1_1", 128)
+SR24_Ra_Ts <- coh(xwt_SR_Rh24, "Ra_imp", "Ts_1_1_1", 128)
+SR24_Ra_SWC <- coh(xwt_SR_Rh24, "Ra_imp", "SWC_1_1_1", 128)
+
+# for Rh 2022
+SR24_Rh_PAR <- coh(xwt_SR_Rh24, "Rh_filled", "PPFD_1_1_1", 128)
+SR24_Rh_Ts <- coh(xwt_SR_Rh24, "Rh_filled", "Ts_1_1_1", 128)
+SR24_Rh_SWC <- coh(xwt_SR_Rh24, "Rh_filled", "SWC_1_1_1", 128)
+
+
+
+
+
+
+## Heat plot of the cross-wavelet power spectrum:
+# for SR 2023
+wc_img(SR_grow23_SR_PAR, "SR vs PAR")
+wc_img(SR_grow23_SR_Ts, "SR vs Ts")
+wc_img(SR_grow23_SR_SWC, "SR vs SWC")
+wc_img(SR_grow23_SR_gs, "SR vs gs")
+
+# for SR 2024
+wc_img(SR24_SR_PAR, "SR vs PAR")
+wc_img(SR24_SR_Ts, "SR vs Ts")
+wc_img(SR24_SR_SWC, "SR vs SWC")
+
+# for Ra 2024
+wc_img(SR24_Ra_PAR, "Ra vs PAR")
+
+wc_img(SR24_Ra_Ts, "Ra vs Ts")
+wc_img(SR24_Ra_SWC, "Ra vs SWC")
+
+# for Rh 2024
+wc_img(SR24_Rh_PAR, "Rh vs PAR")
+wc_img(SR24_Rh_Ts, "Rh vs Ts")
+wc_img(SR24_Rh_SWC, "Rh vs SWC")
+
+
+# for SR 2022
+wc_img(SR_may22_SR_PAR, "SR vs PAR")
+wc_img(SR_may22_SR_Ts, "SR vs Ts")
+wc_img(SR24_SR_SWC, "SR vs SWC")
+
+# for Ra 2024
+wc_img(SR24_Ra_PAR, "Ra vs PAR")
+wc_img(SR24_Ra_Ts, "Ra vs Ts")
+wc_img(SR24_Ra_SWC, "Ra vs SWC")
+
+# for Rh 2024
+wc_img(SR24_Rh_PAR, "Rh vs PAR")
+wc_img(SR24_Rh_Ts, "Rh vs Ts")
+wc_img(SR24_Rh_SWC, "Rh vs SWC")
+
+
+# For 2023 SR
+wc.avg(SR23_SR_PAR, siglvl = 0.05, sigcol = "red", sigpch = 20, periodlab = "period (days)")
+wc.avg(SR23_SR_Ts, siglvl = 0.05, sigcol = "red", sigpch = 20, periodlab = "period (days)", legend.coords = "bottomright")
+wc.avg(SR23_SR_SWC, siglvl = 0.05, sigcol = "red", sigpch = 20, periodlab = "period (days)", legend.coords = "bottomright")
+
+# For 2024 SR
+wc.avg(SR24_SR_PAR, siglvl = 0.05, sigcol = "red", sigpch = 20, periodlab = "period (days)", main = "SR vs PAR")
+wc.avg(SR24_SR_Ts, siglvl = 0.05, sigcol = "red", sigpch = 20, periodlab = "period (days)", main = "SR vs Ts")
+wc.avg(SR24_SR_SWC, siglvl = 0.05, sigcol = "red", sigpch = 20, periodlab = "period (days)", main = "SR vs SWC")
+
+# For 2024 Ra
+wc.avg(SR24_Ra_PAR, siglvl = 0.05, sigcol = "red", sigpch = 20, periodlab = "period (days)", main = "Ra vs PAR")
+wc.avg(SR24_Ra_Ts, siglvl = 0.05, sigcol = "red", sigpch = 20, periodlab = "period (days)", main = "Ra vs Ts")
+wc.avg(SR24_Ra_SWC, siglvl = 0.05, sigcol = "red", sigpch = 20, periodlab = "period (days)", main = "Ra vs SWC")
+
+# For 2024 Rh
+wc.avg(SR24_Rh_PAR, siglvl = 0.05, sigcol = "red", sigpch = 20, periodlab = "period (days)", main = "Rh vs PAR")
+wc.avg(SR24_Rh_Ts, siglvl = 0.05, sigcol = "red", sigpch = 20, periodlab = "period (days)", main = "Rh vs Ts")
+wc.avg(SR24_Rh_SWC, siglvl = 0.05, sigcol = "red", sigpch = 20, periodlab = "period (days)", main = "Rh vs SWC")
+
+
+# At the period 1
+SR23_SR_PAR.period1 = SR23_SR_PAR$Angle[201, ]
+24*mean(SR23_SR_PAR.period1)/(2*pi)
+plot(24*SR23_SR_PAR$Angle[201, ]/(2*pi))
+
+SR23_SR_Ts.period1 = SR23_SR_Ts$Angle[201, ]
+24*mean(SR23_SR_Ts.period1)/(2*pi)
+plot(24*SR23_SR_Ts$Angle[201, ]/(2*pi))
+
+
+# Ra vs PAR
+SR24_Ra_PAR.period1 = SR24_Ra_PAR$Angle[201, ]
+24*mean(SR24_Ra_PAR.period1)/(2*pi)
+plot(24*SR24_Ra_PAR$Angle[201, ]/(2*pi))
+
+# Rh vs PAR
+SR24_Rh_PAR.period1 = SR24_Rh_PAR$Angle[201, ]
+24*mean(SR24_Rh_PAR.period1)/(2*pi)
+plot(24*SR24_Rh_PAR$Angle[201, ]/(2*pi))
+
+# Rh vs SWC
+SR24_Rh_SWC.period1 = SR24_Rh_PAR$Angle[201, ]
+24*mean(SR24_Rh_SWC.period1)/(2*pi)
+plot(24*SR24_Rh_SWC$Angle[201, ]/(2*pi))
+
+# Rh vs Ts
+SR24_Rh_Ts.period1 = SR24_Rh_PAR$Angle[201, ]
+24*mean(SR24_Rh_Ts.period1)/(2*pi)
+plot(24*SR24_Rh_Ts$Angle[201, ]/(2*pi))
+```
+
+
+
+
+```{r XWA for SR-Rh}
+# for SR-Rh Spr22
+SR_spr22_Rh_PAR <- coh(scale_pad(SR_Rh_Spr22), "Rh", "PPFD_IN_1_1_1", 128)
+SR_spr22_Rh_Ts <- coh(scale_pad(SR_Rh_Spr22), "Rh","TS_1_1_1", 128)
+SR_spr22_Rh_SWC <- coh(scale_pad(SR_Rh_Spr22), "Rh", "SWC_1_1_1", 128)
+SR_spr22_Rh_gs <- coh(scale_pad(SR_Rh_Spr22), "Rh", "gs_qaqc", 128)
+
+wc_img(SR_spr22_Rh_PAR, "Rh vs PAR")
+wc_img(SR_spr22_Rh_Ts, "Rh vs Ts")
+wc_img(SR_spr22_Rh_SWC, "Rh vs SWC")
+wc_img(SR_spr22_Rh_gs, "Rh vs gs")
+
+
+plot(24*SR_spr22_Rh_PAR$Angle[201, ]/(2*pi), main = "Spr22: Rh vs PAR", xlab = "", ylab = "Hours")
+plot(24*SR_spr22_Rh_Ts$Angle[201, ]/(2*pi), main = "Spr22: Rh vs Ts", xlab = "", ylab = "Hours")
+
+
+
+wc.avg(SR23_SR_PAR, siglvl = 0.05, sigcol = "red", sigpch = 20, periodlab = "period (days)")
+wc.avg(SR23_SR_Ts, siglvl = 0.05, sigcol = "red", sigpch = 20, periodlab = "period (days)", legend.coords = "bottomright")
+wc.avg(SR23_SR_SWC, siglvl = 0.05, sigcol = "red", sigpch = 20, periodlab = "period (days)", legend.coords = "bottomright")
+```
+
+
+
+mice package: https://datascienceplus.com/imputing-missing-data-with-r-mice-package/
+https://www.rdocumentation.org/packages/mice/versions/3.16.0/topics/mice
+```{r impute data}
+
+SR_may22_wavelet <-   
+  left_join(data.frame(Datetime_30min_CST = seq(as.POSIXct("2022-05-22 11:00:00", tz = "America/Chicago"), 
+                                            as_datetime("2022-06-09 03:00:00", tz = "America/Chicago"), by = "1 hour")),
+          SR_may22 %>% select(c(Datetime_30min_CST, SR, Rh, Ra)), by = "Datetime_30min_CST") %>%
+  left_join(biomet_22, by = c("Datetime_30min_CST" = "TIMESTAMP_START")) %>% 
+  select(c(Datetime_30min_CST, SR, Rh, Ra, PPFD_IN_1_1_1, PPFD_IN_1_2_1, TS_1_1_1, TS_1_2_1))
+
+  
+# check the amount of NAs
+pMiss <- function(x){sum(is.na(x))/length(x)*100}
+apply(SR_may22_wavelet,2,pMiss)
+
+# imputation using "pmm" method (= predictive mean matching)
+# need to remove non-numerical columns
+
+SR_may22_wavelet_imp <- 
+  mice(SR_may22_wavelet[,-1],
+       m=5, # the number of imputed datasets. 5 is default.
+       maxit=50,
+       meth='pmm', # imputation method; methods(mice) for others
+       seed=500)
+
+# check the 5 imputed dataset
+SR_may22_wavelet_imp$imp$PPFD_IN_1_1_1
+
+# the 2nd seems to be reasonable 
+SR_may22_wavelet_comp <- complete(SR_may22_wavelet_imp,2)
+```
+
+
+Functions for wavelet analysis
+```{r}
+
+coh <- function(df, var1, var2, upper){
+  analyze.coherency(df, my.pair = c(var1, var2),
+                          loess.span = 0,     ## no detrending required
+                          dt = 1/24,          ## defines the time unit (1 day) --- 24 slots in a day! 
+                          dj = 1/100,         ## resolution along period axis
+                          lowerPeriod = 1/4,  ## 6 hour
+                          upperPeriod = upper,  ## 128 days
+                          make.pval = T,      ## check for significance
+                          n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+}
+
+
+# function to generate a cross-wavelet power spectrum
+wc_img <- function(df, title){
+  wc.image(df,
+         legend.params = list(lab = "cross-wavelet power levels"),
+         lvl = 0.3,
+         timelab = "Hour",
+         periodlab = "period (days)",
+         main = title)
+}
+
+```
+
+```{r Rh vs Ts}
+
+may22_Rh_Ts <- 
+  analyze.coherency(SR_may22_wavelet_comp, my.pair = c("Rh", "TS_1_1_1"),
+                          loess.span = 0,     ## no detrending required
+                          dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                          dj = 1/100,         ## resolution along period axis
+                          lowerPeriod = 1/4,  ## 6 hour
+                          upperPeriod = 20,    ## 20 days
+                          make.pval = T,      ## check for significance
+                          n.sim = 10)         ## 10 white-noise simulations used for assessing significance
+
+
+## Heat plot of the cross-wavelet power spectrum:
+wc.image(may22_Rh_Ts,
+         legend.params = list(lab = "cross-wavelet power levels"),
+         lvl = 0.3,
+         timelab = "Hour",
+         periodlab = "period (days)",
+         main = "Rh vs Ts")
+
+wc.avg(may22_Rh_Ts, siglvl = 0.01, sigcol = "red", sigpch = 20, periodlab = "period (days)")
+
+# At the period 1
+may22_Rh_Ts.period1 = may22_Rh_Ts$Angle[201, ]
+
+# the mean arrow direction at Period 1
+24*mean(may22_Rh_Ts.period1)/(2*pi)
+
+# there is a peak at Period 8+ and significant around Hour 200
+24*may22_Rh_Ts$Angle[510, ][200]/(2*pi)
+
+may22_Rh_Ts.period1.300 = may22_Rh_Ts.period1[300] ## looks red...
+## share of 2*pi, corresponding to 1 day: my.Angle.period1.middle/(2*pi) (measured in days)
+## We want this, measured in hours: 
+cat('Ts is leading by ', 24*may22_Rh_Ts.period1.300/(2*pi), 'hours.\n')
+
+wt.image(may22_Rh_Ts,my.series="Rh", main = "Rh") 
+wt.image(may22_Rh_Ts,my.series="TS_1_1_1", main = "Ts")
+```
+
+
+```{r Ra vs Ts}
+may22_Ra_Ts <- 
+  analyze.coherency(SR_may22_wavelet_comp, my.pair = c("Ra", "TS_1_1_1"),
+                          loess.span = 0,     ## no detrending required
+                          dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                          dj = 1/100,         ## resolution along period axis
+                          lowerPeriod = 1/4,  ## 6 hour
+                          upperPeriod = 20,    ## 20 days
+                          make.pval = T,      ## check for significance
+                          n.sim = 10)         ## 10 white-noise simulations used for assessing significance
+
+
+## Heat plot of the cross-wavelet power spectrum:
+wc.image(may22_Ra_Ts,
+         legend.params = list(lab = "cross-wavelet power levels"),
+         lvl = 0.3,
+         timelab = "Hour",
+         periodlab = "period (days)",
+         main = "Ra vs Ts")
+
+wc.avg(may22_Ra_Ts, siglvl = 0.01, sigcol = "red", sigpch = 20, 
+       periodlab = "period (days)",
+       periodtck=1, periodtcl=NULL,
+       main = "Ra vs Ts: cross-wavelet power averages")
+
+may22_Ra_Ts.period1 = may22_Ra_Ts$Angle[201, ]
+
+# the mean arrow direction at Period 1
+24*mean(may22_Ra_Ts.period1)/(2*pi)
+
+# there is a peak at Period 8.4 and significant around Hour 200
+24*may22_Ra_Ts$Angle[501, ][200]/(2*pi)
+
+
+cat('Ts is leading by ', 24*may22_Rh_Ts.period1.300/(2*pi), 'hours.\n')
+
+wt.image(may22_Rh_Ts,my.series="Rh", main = "Rh") 
+wt.image(may22_Rh_Ts,my.series="TS_1_1_1", main = "Ts")
+
+
+```
+
+
+```{r Ra vs PAR}
+may22_Ra_PAR <- 
+  analyze.coherency(SR_may22_wavelet_comp, my.pair = c("Ra", "PPFD_IN_1_1_1"),
+                          loess.span = 0,     ## no detrending required
+                          dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                          dj = 1/100,         ## resolution along period axis
+                          lowerPeriod = 1/4,  ## 6 hour
+                          upperPeriod = 20,    ## 20 days
+                          make.pval = T,      ## check for significance
+                          n.sim = 10)         ## 10 white-noise simulations used for assessing significance
+
+
+## Heat plot of the cross-wavelet power spectrum:
+wc.image(may22_Ra_PAR,
+         legend.params = list(lab = "cross-wavelet power levels"),
+         lvl = 0.3, # arrows to be plotted when the cw power is at least 0.3
+         timelab = "Hour",
+         periodlab = "period (days)",
+         main = "Ra vs PAR")
+
+# cross-wavelet power averages
+wc.avg(may22_Ra_PAR, siglvl = 0.01, sigcol = "red", 
+       sigpch = 20, periodlab = "period (days)",
+       main = "Ra vs PAR cross-wavelet power averages")
+
+# at period 1
+may22_Ra_PAR.period1 = may22_Ra_PAR$Angle[201, ]
+
+# the mean arrow direction at Period 1
+24*mean(may22_Ra_PAR.period1)/(2*pi)
+
+# there is a peak at Period 0.5 around Hour 240
+24*may22_Ra_PAR$Angle[101, ][240]/(2*pi)
+
+may22_Ra_PAR.period1.300 = may22_Ra_PAR.period1[300] ## looks red...
+## share of 2*pi, corresponding to 1 day: my.Angle.period1.middle/(2*pi) (measured in days)
+## We want this, measured in hours: 
+cat('Ts is leading by ', 24*may22_Rh_Ts.period1.300/(2*pi), 'hours.\n')
+
+wt.image(may22_Ra_PAR,my.series="Ra", main = "Ra") 
+wt.image(may22_Ra_PAR,my.series="PPFD_IN_1_1_1", main = "PAR")
+
+
+```
+
+```{r Rh vs PAR}
+may22_Rh_PAR <- 
+  analyze.coherency(SR_may22_wavelet_comp, my.pair = c("Rh", "PPFD_IN_1_1_1"),
+                          loess.span = 0,     ## no detrending required
+                          dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                          dj = 1/100,         ## resolution along period axis
+                          lowerPeriod = 1/4,  ## 6 hour
+                          upperPeriod = 20,    ## 20 days
+                          make.pval = T,      ## check for significance
+                          n.sim = 10)         ## 10 white-noise simulations used for assessing significance
+
+
+## Heat plot of the cross-wavelet power spectrum:
+wc.image(may22_Rh_PAR,
+         legend.params = list(lab = "cross-wavelet power levels"),
+         lvl = 0.3,
+         timelab = "Hour",
+         periodlab = "period (days)",
+         main = "Rh vs PAR")
+
+wc.avg(may22_Rh_PAR, siglvl = 0.01, sigcol = "red", sigpch = 20, periodlab = "period (days)")
+
+# at period 1
+may22_Rh_PAR.period1 = may22_Rh_PAR$Angle[201, ]
+
+# the mean arrow direction at Period 1
+24*mean(may22_Rh_PAR.period1)/(2*pi)
+
+cat('Ts is leading by ', 24*may22_Rh_Ts.period1.300/(2*pi), 'hours.\n')
+
+wt.image(may22_Ra_PAR,my.series="Ra", main = "Ra") 
+wt.image(may22_Ra_PAR,my.series="PPFD_IN_1_1_1", main = "PAR")
+
+
+```
