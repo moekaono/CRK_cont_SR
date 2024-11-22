@@ -1,0 +1,117 @@
+---
+title: "phase_angle_diff_fig"
+author: "MOEKA"
+date: "2024-11-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(lubridate)
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(tidyr)
+library(gridExtra)
+library(purrr)
+```
+
+
+
+```{r}
+filenames_raw <- list.files("G:/My Drive/Research/Projects/DC_auto/Data/Nov2024_rerun/result_pad_64d_raw/df_diurnal/", "*.csv", full.names = T)
+
+filenames_res <- list.files("G:/My Drive/Research/Projects/DC_auto/Data/Nov2024_rerun/result_pad_64d_res/df_diurnal/", "*.csv", full.names = T)
+
+
+ts_files <- grep("_Ts\\.csv", filenames_raw, value = TRUE)
+par_files <-grep("_PAR\\.csv", filenames_res, value = TRUE)
+```
+
+
+
+```{r}
+phase_diff_csv <- function(filename){
+  
+  df <- strsplit(filename, "/")[[1]][10]
+  season <- strsplit(df, "_")[[1]][3]
+  resp <- strsplit(df, "_")[[1]][2]
+  driver <- sub(".csv","",strsplit(df, "_")[[1]][4])
+  
+  result <- 
+    read.csv(filename) %>%
+    select(c(date, NA_flag, pval_period1, Angle_raw)) %>% 
+    mutate(day = as.Date(date), 
+         Angle_raw_2 = ifelse(pval_period1 <= .1, Angle_raw, NA)) %>% 
+    group_by(day) %>% 
+    summarise(angle_raw_avg = mean(Angle_raw)) %>% 
+    mutate(phase_hr = (angle_raw_avg*24)/(2*pi))
+  
+  result %>% 
+    summarise(
+      Phase_hr_avg = mean(phase_hr, na.rm = T),
+      Phase_hr_sd = sd(phase_hr, na.rm = T)
+      ) %>% 
+    mutate(
+      df = df,
+      season = season,
+      resp = resp,
+      driver = driver
+    ) 
+}
+
+
+ts_phase <- purrr::map_dfr(ts_files, phase_diff_csv)
+ts_phase$season <- 
+  factor(ts_phase$season, levels = c("May22", "Mar23", "Jan24", "Feb24", "Mar24"))
+
+# csv
+write.csv(ts_phase, "G:/My Drive/Research/Projects/DC_auto/Data/Nov2024_rerun/ts_phase.csv", row.names = F)
+
+par_phase <- purrr::map_dfr(par_files, phase_diff_csv)
+par_phase$season <- 
+  factor(par_phase$season, levels = c("May22", "Mar23", "Jan24", "Feb24", "Mar24"))
+
+```
+
+
+```{r graph}
+
+phase_diff_graph <- function(df, res, driver){
+  
+  df %>% 
+  filter(resp == res) %>% 
+  ggplot(aes(season, Phase_hr_avg)) +
+  geom_point(size = 5) + 
+  geom_errorbar(
+    aes(season,
+        ymin = Phase_hr_avg - Phase_hr_sd,
+        ymax = Phase_hr_avg + Phase_hr_sd,
+        ),
+    lwd = 1.5, width = .2
+  ) +
+  geom_abline(slope = 0, intercept = 0) + 
+  theme_classic() + 
+  ylim(-10, 10) +
+  ggtitle(paste(res, "vs", driver)) +
+  ylab("Lead/Lag Hour") + 
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(size = 15),
+    axis.title.y = element_text(size = 15),
+    axis.text.y = element_text(size = 15),
+    axis.ticks.x = element_blank(),
+    panel.border = element_rect(colour = "black", fill = NA, linewidth = 1)
+        )
+}
+
+phase_diff_graph(par_phase, "rRh", "PAR")
+phase_diff_graph(par_phase, "rRa", "PAR")
+phase_diff_graph(ts_phase, "Rh", "Ts")
+phase_diff_graph(ts_phase, "Ra", "Ts")
+phase_diff_graph(ts_phase, "PAR", "Ts")
+
+    
+
+```
