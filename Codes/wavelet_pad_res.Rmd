@@ -176,9 +176,16 @@ daily_q10 <- function(df, SR_col, Rh_col, Ra_col){
   
   output <- 
     left_join(df1, df2, by = "day") %>%
-    mutate(rSR = SR - SR20,
-           rRh = Rh - Rh20,
-           rRa = Ra - Ra20)
+    mutate(
+      mSR = SR20 * Q10_SR ^ ((TS_1_1_1 - 20) / (10)),
+      mRh = Rh20 * Q10_Rh ^ ((TS_1_1_1 - 20) / (10)),
+      mRa = Ra20 * Q10_Ra ^ ((TS_1_1_1 - 20) / (10))
+           ) %>% 
+    mutate(
+      rSR = SR - mSR,
+      rRh = Rh - mRh,
+      rRa = Ra - mRa
+    )
     
   
   return(output)
@@ -496,8 +503,8 @@ wc_avg <- function(df, ymax){
 ```
 
 ```{r location to save}
-dir_pwr = "G:/My Drive/Research/Projects/DC_auto/Data/Nov2024_rerun/result_pad_64d_res/df_temporal_pwr/"
-dir_diurnal = "G:/My Drive/Research/Projects/DC_auto/Data/Nov2024_rerun/result_pad_64d_res/df_diurnal/"
+dir_pwr = "G:/My Drive/Research/Projects/DC_auto/Data/Nov2024_rerun/Re_result_pad_64d_res/df_temporal_pwr/"
+dir_diurnal = "G:/My Drive/Research/Projects/DC_auto/Data/Nov2024_rerun/Re_result_pad_64d_res/df_diurnal/"
 
 ```
 
@@ -510,6 +517,7 @@ detect_gaps(SR_Rh_May22, "PPFD_IN_1_1_1")
 
 # take residuals
 SR_Rh_May22_res <- daily_q10(SR_Rh_May22, "SR1", "Rh", "Ra1")
+write.csv(SR_Rh_May22_res, "G:/My Drive/Research/Projects/DC_auto/Data/Nov2024_rerun/Re_result_pad_64d_res/df/C1.csv", row.names = F)
 
 # residual Rh
 wc_rRh_May22 <- wc_summary(SR_Rh_May22_res, "rRh")
@@ -523,13 +531,13 @@ rRh_Ts_May22_pwr <- wc_avg(wc_rRh_May22$Ts, 25)
 rRh_SWC_May22_pwr <- wc_avg(wc_rRh_May22$SWC, 25)
 
 # csv output
-write.csv(rRh_PAR_May22_pwr$df, paste0(dir_pwr, "rRh_PAR_May22.csv"), row.names = F)
-write.csv(rRh_Ts_May22_pwr$df, paste0(dir_pwr, "rRh_Ts_May22.csv"), row.names = F)
-write.csv(rRh_SWC_May22_pwr$df, paste0(dir_pwr, "rRh_SWC_May22.csv"), row.names = F)
+write.csv(rRh_PAR_May22_pwr$df, paste0(dir_pwr, "C1_rRh_PAR_May22.csv"), row.names = F)
+write.csv(rRh_Ts_May22_pwr$df, paste0(dir_pwr, "C1_rRh_Ts_May22.csv"), row.names = F)
+write.csv(rRh_SWC_May22_pwr$df, paste0(dir_pwr, "C1_rRh_SWC_May22.csv"), row.names = F)
 
 # extracting diurnal angle & power patterns from heatmap
 wc_rRh_May22_diurnal_summary <- wc_result_summary(SR_Rh_May22_res, "rRh", wc_rRh_May22)
-save_to_csv(wc_rRh_May22_diurnal_summary, dir_diurnal, "wc_rRh_May22_")
+save_to_csv(wc_rRh_May22_diurnal_summary, dir_diurnal, "C1_wc_rRh_May22_")
 
 
 # viz
@@ -551,13 +559,13 @@ rRa_Ts_May22_pwr <- wc_avg(wc_rRa_May22$Ts, 25)
 rRa_SWC_May22_pwr <- wc_avg(wc_rRa_May22$SWC, 25)
 
 # csv output
-write.csv(rRa_PAR_May22_pwr$df, paste0(dir_pwr, "rRa_PAR_May22.csv"), row.names = F)
-write.csv(rRa_Ts_May22_pwr$df, paste0(dir_pwr, "rRa_Ts_May22.csv"), row.names = F)
-write.csv(rRa_SWC_May22_pwr$df, paste0(dir_pwr, "rRa_SWC_May22.csv"), row.names = F)
+write.csv(rRa_PAR_May22_pwr$df, paste0(dir_pwr, "C1_rRa_PAR_May22.csv"), row.names = F)
+write.csv(rRa_Ts_May22_pwr$df, paste0(dir_pwr, "C1_rRa_Ts_May22.csv"), row.names = F)
+write.csv(rRa_SWC_May22_pwr$df, paste0(dir_pwr, "C1_rRa_SWC_May22.csv"), row.names = F)
 
 # extracting diurnal angle & power patterns from heatmap
 wc_rRa_May22_diurnal_summary <- wc_result_summary(SR_Rh_May22_res, "rRa", wc_rRa_May22)
-save_to_csv(wc_rRa_May22_diurnal_summary, dir_diurnal, "wc_rRa_May22_")
+save_to_csv(wc_rRa_May22_diurnal_summary, dir_diurnal, "C1_wc_rRa_May22_")
 
 # viz
 ggarrange(
@@ -581,7 +589,7 @@ wt_rRh_May22 <-
                   n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
 
 rRh_May22_pwr <- wt_avg(wt_rRh_May22, 25)
-write.csv(rRh_May22_pwr$df, paste0(dir_pwr, "rRh_May22.csv"), row.names = F)
+write.csv(rRh_May22_pwr$df, paste0(dir_pwr, "C1_rRh_May22.csv"), row.names = F)
 
 # rRa
 wt_rRa_May22 <- 
@@ -595,7 +603,7 @@ wt_rRa_May22 <-
                   n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
 
 rRa_May22_pwr <- wt_avg(wt_rRa_May22, 25)
-write.csv(rRa_May22_pwr$df, paste0(dir_pwr, "rRa_May22.csv"), row.names = F)
+write.csv(rRa_May22_pwr$df, paste0(dir_pwr, "C1_rRa_May22.csv"), row.names = F)
 ```
 
 
@@ -611,6 +619,7 @@ detect_gaps(SR_Rh_Mar23, "Ra1")
 
 SR_Rh_Mar23_res <-
   daily_q10(SR_Rh_Mar23, "SR1", "Rh", "Ra1")
+write.csv(SR_Rh_Mar23_res, "G:/My Drive/Research/Projects/DC_auto/Data/Nov2024_rerun/Re_result_pad_64d_res/df/C2.csv", row.names = F)
 
 # residual Rh
 wc_rRh_Mar23 <- wc_summary(SR_Rh_Mar23_res, "rRh")
@@ -622,13 +631,13 @@ rRh_Ts_Mar23_pwr <- wc_avg(wc_rRh_Mar23$Ts, 25)
 rRh_SWC_Mar23_pwr <- wc_avg(wc_rRh_Mar23$SWC, 25)
 
 # csv output
-write.csv(rRh_PAR_Mar23_pwr$df, paste0(dir_pwr, "rRh_PAR_Mar23.csv"), row.names = F)
-write.csv(rRh_Ts_Mar23_pwr$df, paste0(dir_pwr, "rRh_Ts_Mar23.csv"), row.names = F)
-write.csv(rRh_SWC_Mar23_pwr$df, paste0(dir_pwr, "rRh_SWC_Mar23.csv"), row.names = F)
+write.csv(rRh_PAR_Mar23_pwr$df, paste0(dir_pwr, "C2_rRh_PAR_Mar23.csv"), row.names = F)
+write.csv(rRh_Ts_Mar23_pwr$df, paste0(dir_pwr, "C2_rRh_Ts_Mar23.csv"), row.names = F)
+write.csv(rRh_SWC_Mar23_pwr$df, paste0(dir_pwr, "C2_rRh_SWC_Mar23.csv"), row.names = F)
 
 # result
 wc_rRh_Mar23_diurnal_summary <- wc_result_summary(SR_Rh_Mar23_res, "rRh", wc_rRh_Mar23)
-save_to_csv(wc_rRh_Mar23_diurnal_summary, dir_diurnal, "wc_rRh_Mar23_")
+save_to_csv(wc_rRh_Mar23_diurnal_summary, dir_diurnal, "C2_wc_rRh_Mar23_")
 
 # viz
 ggarrange(
@@ -649,20 +658,21 @@ rRa_Ts_Mar23_pwr <- wc_avg(wc_rRa_Mar23$Ts, 25)
 rRa_SWC_Mar23_pwr <- wc_avg(wc_rRa_Mar23$SWC, 25)
 
 # csv output
-write.csv(rRa_PAR_Mar23_pwr$df, paste0(dir_pwr, "rRa_PAR_Mar23.csv"), row.names = F)
-write.csv(rRa_Ts_Mar23_pwr$df, paste0(dir_pwr, "rRa_Ts_Mar23.csv"), row.names = F)
-write.csv(rRa_SWC_Mar23_pwr$df, paste0(dir_pwr, "rRa_SWC_Mar23.csv"), row.names = F)
+write.csv(rRa_PAR_Mar23_pwr$df, paste0(dir_pwr, "C2_rRa_PAR_Mar23.csv"), row.names = F)
+write.csv(rRa_Ts_Mar23_pwr$df, paste0(dir_pwr, "C2_rRa_Ts_Mar23.csv"), row.names = F)
+write.csv(rRa_SWC_Mar23_pwr$df, paste0(dir_pwr, "C2_rRa_SWC_Mar23.csv"), row.names = F)
 
 # summary
 wc_rRa_Mar23_diurnal_summary <- wc_result_summary(SR_Rh_Mar23_res, "Ra", wc_rRa_Mar23)
-save_to_csv(wc_rRa_Mar23_diurnal_summary, dir_diurnal, "wc_rRa_Mar23_")
+save_to_csv(wc_rRa_Mar23_diurnal_summary, dir_diurnal, "C2_wc_rRa_Mar23_")
 
 # viz
 ggarrange(
   wc_lag_img(wc_rRa_Mar23_diurnal_summary$PAR, "PAR"),
   wc_lag_img(wc_rRa_Mar23_diurnal_summary$Ts, "Ts"),
   wc_lag_img(wc_rRa_Mar23_diurnal_summary$SWC, "SWC"),
-  ncol = 3, common.legend = T)  
+  ncol = 3, common.legend = T
+  )  
 
 ```
 
@@ -679,7 +689,7 @@ wt_rRh_Mar23 <-
 
 
 rRh_Mar23_pwr <- wt_avg(wt_rRh_Mar23, 25)
-write.csv(rRh_Mar23_pwr$df, paste0(dir_pwr, "rRh_Mar23.csv"), row.names = F)
+write.csv(rRh_Mar23_pwr$df, paste0(dir_pwr, "C2_rRh_Mar23.csv"), row.names = F)
 
 # rRa
 wt_rRa_Mar23 <- 
@@ -693,7 +703,7 @@ wt_rRa_Mar23 <-
                   n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
 
 rRa_Mar23_pwr <- wt_avg(wt_rRa_Mar23, 25)
-write.csv(rRa_Mar23_pwr$df, paste0(dir_pwr, "rRa_Mar23.csv"), row.names = F)
+write.csv(rRa_Mar23_pwr$df, paste0(dir_pwr, "C2_rRa_Mar23.csv"), row.names = F)
 ```
 
 
@@ -709,6 +719,7 @@ detect_gaps(SR_Rh_Jan24, "Rh")
 detect_gaps(SR_Rh_Jan24, "Ra1")
 
 SR_Rh_Jan24_res <- daily_q10(SR_Rh_Jan24, "SR1", "Rh", "Ra1")
+write.csv(SR_Rh_Jan24_res, "G:/My Drive/Research/Projects/DC_auto/Data/Nov2024_rerun/Re_result_pad_64d_res/df/C3.csv", row.names = F)
 
 # Rh residual
 wc_rRh_Jan24 <- wc_summary(SR_Rh_Jan24_res, "rRh")
@@ -721,12 +732,12 @@ rRh_Ts_Jan24_pwr <- wc_avg(wc_rRh_Jan24$Ts, 25)
 rRh_SWC_Jan24_pwr <- wc_avg(wc_rRh_Jan24$SWC, 25)
 
 # csv output
-write.csv(rRh_PAR_Jan24_pwr$df, paste0(dir_pwr, "rRh_PAR_Jan24.csv"), row.names = F)
-write.csv(rRh_Ts_Jan24_pwr$df, paste0(dir_pwr, "rRh_Ts_Jan24.csv"), row.names = F)
-write.csv(rRh_SWC_Jan24_pwr$df, paste0(dir_pwr, "rRh_SWC_Jan24.csv"), row.names = F)
+write.csv(rRh_PAR_Jan24_pwr$df, paste0(dir_pwr, "C3_rRh_PAR_Jan24.csv"), row.names = F)
+write.csv(rRh_Ts_Jan24_pwr$df, paste0(dir_pwr, "C3_rRh_Ts_Jan24.csv"), row.names = F)
+write.csv(rRh_SWC_Jan24_pwr$df, paste0(dir_pwr, "C3_rRh_SWC_Jan24.csv"), row.names = F)
 
 wc_rRh_Jan24_diurnal_summary <- wc_result_summary(SR_Rh_Jan24_res, "rRh", wc_rRh_Jan24)
-save_to_csv(wc_rRh_Jan24_diurnal_summary, dir_diurnal, "wc_rRh_Jan24_")
+save_to_csv(wc_rRh_Jan24_diurnal_summary, dir_diurnal, "C3_wc_rRh_Jan24_")
 
 
 # viz
@@ -750,13 +761,13 @@ rRa_Ts_Jan24_pwr <- wc_avg(wc_rRa_Jan24$Ts, 25)
 rRa_SWC_Jan24_pwr <- wc_avg(wc_rRa_Jan24$SWC, 25)
 
 # csv output
-write.csv(rRa_PAR_Jan24_pwr$df, paste0(dir_pwr, "rRa_PAR_Jan24.csv"), row.names = F)
-write.csv(rRa_Ts_Jan24_pwr$df, paste0(dir_pwr, "rRa_Ts_Jan24.csv"), row.names = F)
-write.csv(rRa_SWC_Jan24_pwr$df, paste0(dir_pwr, "rRa_SWC_Jan24.csv"), row.names = F)
+write.csv(rRa_PAR_Jan24_pwr$df, paste0(dir_pwr, "C3_rRa_PAR_Jan24.csv"), row.names = F)
+write.csv(rRa_Ts_Jan24_pwr$df, paste0(dir_pwr, "C3_rRa_Ts_Jan24.csv"), row.names = F)
+write.csv(rRa_SWC_Jan24_pwr$df, paste0(dir_pwr, "C3_rRa_SWC_Jan24.csv"), row.names = F)
 
 # result
 wc_rRa_Jan24_diurnal_summary <- wc_result_summary(SR_Rh_Jan24_res, "rRa", wc_rRa_Jan24)
-save_to_csv(wc_rRa_Jan24_diurnal_summary, dir_diurnal, "wc_rRa_Jan24_")
+save_to_csv(wc_rRa_Jan24_diurnal_summary, dir_diurnal, "C3_wc_rRa_Jan24_")
 
 
 # viz
@@ -782,7 +793,7 @@ detect_gaps(SR_Rh_Feb24, "Rh")
 detect_gaps(SR_Rh_Feb24, "Ra")
 
 SR_Rh_Feb24_res <- daily_q10(SR_Rh_Feb24, "SR", "Rh", "Ra")
-
+write.csv(SR_Rh_Feb24_res, "G:/My Drive/Research/Projects/DC_auto/Data/Nov2024_rerun/Re_result_pad_64d_res/df/C4.csv", row.names = F)
 
 # Ra residual
 wc_rRh_Feb24 <- wc_summary(SR_Rh_Feb24_res, "rRh")
@@ -794,12 +805,12 @@ rRh_Ts_Feb24_pwr <- wc_avg(wc_rRh_Feb24$Ts, 25)
 rRh_SWC_Feb24_pwr <- wc_avg(wc_rRh_Feb24$SWC, 25)
 
 # csv output
-write.csv(rRh_PAR_Feb24_pwr$df, paste0(dir_pwr, "rRh_PAR_Feb24.csv"), row.names = F)
-write.csv(rRh_Ts_Feb24_pwr$df, paste0(dir_pwr, "rRh_Ts_Feb24.csv"), row.names = F)
-write.csv(rRh_SWC_Feb24_pwr$df, paste0(dir_pwr, "rRh_SWC_Feb24.csv"), row.names = F)
+write.csv(rRh_PAR_Feb24_pwr$df, paste0(dir_pwr, "C4_rRh_PAR_Feb24.csv"), row.names = F)
+write.csv(rRh_Ts_Feb24_pwr$df, paste0(dir_pwr, "C4_rRh_Ts_Feb24.csv"), row.names = F)
+write.csv(rRh_SWC_Feb24_pwr$df, paste0(dir_pwr, "C4_rRh_SWC_Feb24.csv"), row.names = F)
 
 wc_rRh_Feb24_diurnal_summary <- wc_result_summary(SR_Rh_Feb24_res, "rRh", wc_rRh_Feb24)
-save_to_csv(wc_rRh_Feb24_diurnal_summary, dir_diurnal, "wc_rRh_Feb24_")
+save_to_csv(wc_rRh_Feb24_diurnal_summary, dir_diurnal, "C4_wc_rRh_Feb24_")
 
 
 # viz
@@ -823,12 +834,12 @@ rRa_Ts_Feb24_pwr <- wc_avg(wc_rRa_Feb24$Ts, 25)
 rRa_SWC_Feb24_pwr <- wc_avg(wc_rRa_Feb24$SWC, 25)
 
 # csv output
-write.csv(rRa_PAR_Feb24_pwr$df, paste0(dir_pwr, "rRa_PAR_Feb24.csv"), row.names = F)
-write.csv(rRa_Ts_Feb24_pwr$df, paste0(dir_pwr, "rRa_Ts_Feb24.csv"), row.names = F)
-write.csv(rRa_SWC_Feb24_pwr$df, paste0(dir_pwr, "rRa_SWC_Feb24.csv"), row.names = F)
+write.csv(rRa_PAR_Feb24_pwr$df, paste0(dir_pwr, "C4_rRa_PAR_Feb24.csv"), row.names = F)
+write.csv(rRa_Ts_Feb24_pwr$df, paste0(dir_pwr, "C4_rRa_Ts_Feb24.csv"), row.names = F)
+write.csv(rRa_SWC_Feb24_pwr$df, paste0(dir_pwr, "C4_rRa_SWC_Feb24.csv"), row.names = F)
 
 wc_rRa_Feb24_diurnal_summary <- wc_result_summary(SR_Rh_Feb24_res, "rRh", wc_rRa_Feb24)
-save_to_csv(wc_rRa_Feb24_diurnal_summary, dir_diurnal, "wc_rRa_Feb24_")
+save_to_csv(wc_rRa_Feb24_diurnal_summary, dir_diurnal, "C4_wc_rRa_Feb24_")
 
 
 # viz
@@ -853,6 +864,7 @@ detect_gaps(SR_Rh_Mar24, "Rh")
 detect_gaps(SR_Rh_Mar24, "Ra")
 
 SR_Rh_Mar24_res <- daily_q10(SR_Rh_Mar24, "SR", "Rh", "Ra")
+write.csv(SR_Rh_Mar24_res, "G:/My Drive/Research/Projects/DC_auto/Data/Nov2024_rerun/Re_result_pad_64d_res/df/C5.csv", row.names = F)
 
 # residual Rh
 wc_rRh_Mar24 <- wc_summary(SR_Rh_Mar24_res, "rRh")
@@ -864,12 +876,12 @@ rRh_Ts_Mar24_pwr <- wc_avg(wc_rRh_Mar24$Ts, 25)
 rRh_SWC_Mar24_pwr <- wc_avg(wc_rRh_Mar24$SWC, 25)
 
 # csv output
-write.csv(rRh_PAR_Mar24_pwr$df, paste0(dir_pwr, "rRh_PAR_Mar24.csv"), row.names = F)
-write.csv(rRh_Ts_Mar24_pwr$df, paste0(dir_pwr, "rRh_Ts_Mar24.csv"), row.names = F)
-write.csv(rRh_SWC_Mar24_pwr$df, paste0(dir_pwr, "rRh_SWC_Mar24.csv"), row.names = F)
+write.csv(rRh_PAR_Mar24_pwr$df, paste0(dir_pwr, "C5_rRh_PAR_Mar24.csv"), row.names = F)
+write.csv(rRh_Ts_Mar24_pwr$df, paste0(dir_pwr, "C5_rRh_Ts_Mar24.csv"), row.names = F)
+write.csv(rRh_SWC_Mar24_pwr$df, paste0(dir_pwr, "C5_rRh_SWC_Mar24.csv"), row.names = F)
 
 wc_rRh_Mar24_diurnal_summary <- wc_result_summary(SR_Rh_Mar24_res, "rRh", wc_rRh_Mar24)
-save_to_csv(wc_rRh_Mar24_diurnal_summary, dir_diurnal, "wc_rRh_Mar24_")
+save_to_csv(wc_rRh_Mar24_diurnal_summary, dir_diurnal, "C5_wc_rRh_Mar24_")
 
 # viz
 ggarrange(
@@ -891,12 +903,12 @@ rRa_Ts_Mar24_pwr <- wc_avg(wc_rRa_Mar24$Ts, 25)
 rRa_SWC_Mar24_pwr <- wc_avg(wc_rRa_Mar24$SWC, 25)
 
 # csv output
-write.csv(rRa_PAR_Mar24_pwr$df, paste0(dir_pwr, "rRa_PAR_Mar24.csv"), row.names = F)
-write.csv(rRa_Ts_Mar24_pwr$df, paste0(dir_pwr, "rRa_Ts_Mar24.csv"), row.names = F)
-write.csv(rRa_SWC_Mar24_pwr$df, paste0(dir_pwr, "rRa_SWC_Mar24.csv"), row.names = F)
+write.csv(rRa_PAR_Mar24_pwr$df, paste0(dir_pwr, "C5_rRa_PAR_Mar24.csv"), row.names = F)
+write.csv(rRa_Ts_Mar24_pwr$df, paste0(dir_pwr, "C5_rRa_Ts_Mar24.csv"), row.names = F)
+write.csv(rRa_SWC_Mar24_pwr$df, paste0(dir_pwr, "C5_rRa_SWC_Mar24.csv"), row.names = F)
 
 wc_rRa_Mar24_diurnal_summary <- wc_result_summary(SR_Rh_Mar24_res, "rRh", wc_rRa_Mar24)
-save_to_csv(wc_rRa_Mar24_diurnal_summary, dir_diurnal, "wc_rRa_Mar24_")
+save_to_csv(wc_rRa_Mar24_diurnal_summary, dir_diurnal, "C5_wc_rRa_Mar24_")
 
 # viz
 ggarrange(
@@ -921,7 +933,7 @@ wt_rRh_Jan24 <-
                   n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
 
 rRh_Jan24_pwr <- wt_avg(wt_rRh_Jan24, 25)
-write.csv(rRh_Jan24_pwr$df, paste0(dir_pwr, "rRh_Jan24.csv"), row.names = F)
+write.csv(rRh_Jan24_pwr$df, paste0(dir_pwr, "C3_rRh_Jan24.csv"), row.names = F)
 
 
 # rRa
@@ -937,7 +949,7 @@ wt_rRa_Jan24 <-
 
 
 rRa_Jan24_pwr <- wt_avg(wt_rRa_Jan24, 25)
-write.csv(rRa_Jan24_pwr$df, paste0(dir_pwr, "rRa_Jan24.csv"), row.names = F)
+write.csv(rRa_Jan24_pwr$df, paste0(dir_pwr, "C3_rRa_Jan24.csv"), row.names = F)
 
 
 
@@ -952,7 +964,7 @@ wt_rRh_Feb24 <-
                   n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
 
 rRh_Feb24_pwr <- wt_avg(wt_rRh_Feb24, 25)
-write.csv(rRh_Feb24_pwr$df, paste0(dir_pwr, "rRh_Feb24.csv"), row.names = F)
+write.csv(rRh_Feb24_pwr$df, paste0(dir_pwr, "C4_rRh_Feb24.csv"), row.names = F)
 
 
 # rRa
@@ -968,7 +980,7 @@ wt_rRa_Feb24 <-
 
 
 rRa_Feb24_pwr <- wt_avg(wt_rRa_Feb24, 25)
-write.csv(rRa_Feb24_pwr$df, paste0(dir_pwr, "rRa_Feb24.csv"), row.names = F)
+write.csv(rRa_Feb24_pwr$df, paste0(dir_pwr, "C4_rRa_Feb24.csv"), row.names = F)
 
 
 wt_rRh_Mar24 <- 
@@ -982,7 +994,7 @@ wt_rRh_Mar24 <-
                   n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
 
 rRh_Mar24_pwr <- wt_avg(wt_rRh_Mar24, 25)
-write.csv(rRh_Mar24_pwr$df, paste0(dir_pwr, "rRh_Mar24.csv"), row.names = F)
+write.csv(rRh_Mar24_pwr$df, paste0(dir_pwr, "C5_rRh_Mar24.csv"), row.names = F)
 
 # rRa
 wt_rRa_Mar24 <- 
@@ -996,7 +1008,7 @@ wt_rRa_Mar24 <-
                   n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
 
 rRa_Mar24_pwr <- wt_avg(wt_rRa_Mar24, 25)
-write.csv(rRa_Mar24_pwr$df, paste0(dir_pwr, "rRa_Mar24.csv"), row.names = F)
+write.csv(rRa_Mar24_pwr$df, paste0(dir_pwr, "C5_rRa_Mar24.csv"), row.names = F)
 
 ```
 
