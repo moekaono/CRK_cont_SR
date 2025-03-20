@@ -1,0 +1,14 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+- family-names: "Ono"
+  given-names: "Moeka"
+  orcid: "https://orcid.org/0000-0001-9507-2645"
+- family-names: "Lisa"
+  given-names: "Mona"
+  orcid: "https://orcid.org/0000-0001-9507-2645"
+title: "Software from: The Use of Newly Assimilated Photosynthates by Soil Autotrophic and Heterotrophic Respiration on a Diurnal Scale"
+version: 1.0.0
+doi: 
+date-released: 2025-03-19
+url: "https://github.com/moekaono/CRK_cont_SR"
