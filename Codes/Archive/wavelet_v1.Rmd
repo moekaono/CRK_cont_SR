@@ -1,0 +1,1689 @@
+---
+title: "wavelet angle test"
+author: "Moeka"
+date: "2024-03-06"
+output: github_document
+---
+wavelet analysis: chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj/http://www.hs-stat.com/projects/WaveletComp/WaveletComp_guided_tour.pdf
+
+- would it be better after deciding the period when thinking about the range??
+- Normalization
+All time series should be normalized to have zero mean and unit variance prior to wavelet analysis.  
+
+- Gaps
+Missing values in all the variables should be padded with zeros.
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(WaveletComp)
+library(lubridate)
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(tidyr)
+library(broom)
+library(forestmangr)
+library(gridExtra)
+library(mice)
+library(purrr)
+library(FluxGapsR)
+```
+
+
+```{r read a df}
+setwd("G:/My Drive/Research/Projects/DC_auto/Data")
+
+# read the dataframe - check the CRK_cont_SR_qaqc.Rmd for the quqa steps
+SR_tower <- 
+  read.csv("CRK_SR_tower_combined.csv", header = T) %>%
+  mutate(Datetime_hr_CST = as_datetime(Datetime_hr_CST, tz = "Etc/GMT+6"))
+
+```
+
+- Only SR
+- Spr22: End of Apr - 2022-05-22 10:00:00
+- Fall22: Mid Aug - Beginning of Oct 
+* 1 week gap in the end of August
+- Grow23: 2023-03-10 ~ 2023-08-27 20:00:00 
+
+
+- SR & Rh
+- Spring 22 (M1-2): 2022-05-22 11:00:00 ~ 2022-06-09 15:00:00
+- Winter 22 (M7): 2022-11-23 ~ 2022-11-30 (1 week)
+- Spring 23 (M11): 2023-03-10 ~ 2023-04-04 
+- Spring 23-2 (M0-1): 2023-05-01 01:00:00 ~ 2023-05-15 15:00:00
+- Spring 23-3 (M1): 2023-05-23 18:00:00 ~ 2023-06-06 14:00:00
+- Winter 24 (M3): 2024-01-24 ~ 2024-02-05
+- Spring 24 (M4): 2024-02-20~ 2024-04-03
+
+```{r Extract the period of study}
+
+extract_period <- function(START, END){
+  df <-
+    SR_tower %>%
+    filter(Datetime_hr_CST >= START & Datetime_hr_CST <= END) %>%
+    rename(date = Datetime_hr_CST) # let wc analysis recognize the date column
+  return(df)
+}
+
+
+
+### For SR and Rh ###
+# 2022
+
+SR_Rh_Spr22 <- extract_period("2022-05-22 12:00:00", "2022-06-09 16:00:00")
+SR_Rh_Wnt22 <- extract_period("2022-11-23 13:00:00", "2022-11-30 16:00:00") # only a week
+
+# 2023
+SR_Rh_Spr23 <- extract_period("2023-03-15 21:00:00", "2023-03-31 14:00:00") # Rh missing periodically
+SR_Rh_Spr23_2 <- extract_period("2023-05-01 01:00:00", "2023-05-15 15:00:00")
+SR_Rh_Spr23_3 <- extract_period("2023-05-23 18:00:00", "2023-06-06 14:00:00") # Rh missing periodically
+
+SR_Rh_Spr23_2_3 <- extract_period("2023-05-01 01:00:00", "2023-06-06 14:00:00")
+
+
+# 2024
+SR_Rh_Wnt24 <- extract_period("2024-01-25 09:00:00", "2024-02-04 12:00:00")
+
+SR_Rh_Spr24 <- 
+  extract_period("2024-02-20 14:00:00", "2024-04-03 10:00:00") %>% 
+  rowwise() %>%
+  mutate(SR = mean(c(SR1, SR2), na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(Ra = SR - Rh)
+
+
+
+### For SR ###
+SR_grow23 <- 
+  SR_tower %>%
+  filter(Datetime_hr_CST > "2023-03-10" & Datetime_hr_CST < "2023-8-27 20:00:00") 
+```
+
+```{r Prep before the wavelet analysis}
+# normalize with 0 mean and unit variance - use scale()
+
+# for cross wavelet analysis with Morlet function (continuous) 
+scale_pad <- function(df, var1, var2){
+  df %>%
+    select(c(date, var1, var2)) %>%
+    mutate(NA_flag = ifelse(!is.na(df[[var1]]) & !is.na(df[[var2]]), "0","1")) %>%
+    mutate(across(where(is.numeric), scale)) %>%
+    mutate(across(where(is.numeric), ~replace(., is.na(.), 0)))
+}
+
+# function to calculate daily q10 and base respiration at 20 C
+daily_q10 <- function(df, SR_col, Rh_col, Ra_col){
+  
+  df1 <- df %>%
+    mutate(day = lubridate::date(date)) %>%
+    rename("SR" = !!sym(SR_col)) %>%
+    rename("Rh" = !!sym(Rh_col)) %>%
+    rename("Ra" = !!sym(Ra_col)) 
+
+  
+  # for SR
+  df_SR <- 
+    df1 %>%
+    nls_table(
+      SR ~ R20*Q10^((TS_1_1_1-20)/(10)),
+      mod_start = c(R20=4,Q10=2),
+      .groups = "day") %>%
+    as.data.frame() %>%
+    rename("SR20" = "b0", "Q10_SR" = "b1")
+  
+  df_Rh <- 
+    df1 %>%
+    nls_table(
+      Rh ~ R20*Q10^((TS_1_1_1-20)/(10)),
+      mod_start = c(R20=4,Q10=2),
+      .groups = "day") %>%
+    as.data.frame() %>%
+    rename("Rh20" = "b0", "Q10_Rh" = "b1")
+  
+  df_Ra <- 
+    df1 %>%
+    nls_table(
+      Ra ~ R20*Q10^((TS_1_1_1-20)/(10)),
+      mod_start = c(R20=4,Q10=2),
+      .groups = "day") %>%
+    as.data.frame() %>%
+    rename("Ra20" = "b0", "Q10_Ra" = "b1")
+    
+  
+  df2 <- 
+    list(df_SR, df_Rh, df_Ra) %>% 
+    reduce(full_join, by='day') 
+  
+  output <- 
+    left_join(df1, df2, by = "day") %>%
+    mutate(rSR = SR - SR20,
+           rRh = Rh - Rh20,
+           rRa = Ra - Ra20)
+    
+  
+  return(output)
+}
+
+# function to check the amount of the gaps
+pMiss <- function(x){sum(is.na(x))/length(x)*100}
+
+# function to write a list of dfs to csvs
+save_to_csv <- function(list_of_dfs, dir, fname){
+  for (i in seq_along(list_of_dfs)) {
+  write.csv(list_of_dfs[[i]], paste0(dir, fname, names(list_of_dfs)[i], ".csv"), row.names = FALSE)
+  }
+  }
+```
+
+
+```{r cross wavelet - continuous}
+
+coh <- function(df, var1, var2, upper){
+  df1 <- scale_pad(df, var1, var2)
+  analyze.coherency(df1, my.pair = c(var1, var2),
+                          loess.span = 0,     ## no detrending required
+                          dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                          dj = 1/100,         ## resolution along period axis
+                          lowerPeriod = 1/4,  ## 6 hour
+                          upperPeriod = upper,  ## 128 days
+                          make.pval = T,      ## check for significance
+                          n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+}
+
+# function to generate a cross-wavelet power spectrum
+wc_img <- function(df, title){
+  dev.new(width=6,height=5,noRStudioGD = TRUE)
+  wc.image(df,
+         legend.params = list(lab = "cross-wavelet power levels", # axis label
+                              lab.line = 1.5, # distance between bar label and axis label
+                              mar = 5), 
+         lvl = 0.3,
+         timelab = "Hour",
+         periodlab = "period (days)",
+         main = title)
+
+}
+
+# function to analyze and plot them all not recommended for a longer period  of
+# term
+
+# does not work well when assign an object name..
+# want to make a timestamp x axis - too crowded w/ hourly timestamps
+wc_summary <- function(df, resp_var){
+  
+  wc_results <- list()
+  
+  # wc result
+  wc_results[["PAR"]] <- coh(scale_pad(df, resp_var, "PPFD_IN_1_1_1"), resp_var, "PPFD_IN_1_1_1", 128)
+  wc_results[["Ts"]] <- coh(scale_pad(df, resp_var,"TS_1_1_1"), resp_var,"TS_1_1_1", 128)
+  wc_results[["SWC"]] <- coh(scale_pad(df, resp_var, "SWC_1_1_1"), resp_var, "SWC_1_1_1", 128)
+  wc_results[["gs"]] <- coh(scale_pad(df, resp_var, "gs_qaqc"), resp_var, "gs_qaqc", 128)
+
+    return(wc_results)
+  }
+
+# this will generate all 4 plots one by one
+wc_img_gen <- function(df, resp_var){
+ # par(mar=c(2,2,1.5,0.3)+0.1)
+  par(plt = c(0.1, 0.95, 0.1, 0.95))
+  wc_img(df[["PAR"]], paste0(resp_var, " vs PAR"))
+  wc_img(df[["Ts"]], paste0(resp_var, " vs Ts"))
+  wc_img(df[["SWC"]], paste0(resp_var, " vs SWC"))
+  wc_img(df[["gs"]], paste0(resp_var, " vs gc"))
+
+}
+
+# function to generate result df
+coh_result <- function(pad_df, coh_df){
+  
+  # extracting the p-value at Period 1
+  result <- 
+    cbind(pad_df, data.frame(pval_period1 = coh_df$Power.xy.pval[201,])) 
+  
+  # Average angles between Period 0.5 - 1.5
+  # ASSUMING THE Y_AXIS IS LOG-BASED
+  result$Angle_raw <- colMeans(data.frame(coh_df$Angle[101:211,])) 
+  result$Power_raw <- colMeans(data.frame(coh_df$Power.xy[101:211,])) 
+  
+  # Result df with NA_flag, and running averages
+  result <- 
+    result %>%
+    mutate(Angle = ifelse(NA_flag == "0" & pval_period1 < 0.1, Angle_raw, NA),
+           Angle_1d = zoo::rollmean(Angle, k = 24, fill = NA),      # 1 day moving avg - 24
+           Angle_7d = zoo::rollmean(Angle, k = 24*7, fill = NA),    # 7 days moving avg - 24*7
+           Angle_15d = zoo::rollmean(Angle, k = 24*15, fill = NA),  # 15 days moving avg - 24*15
+           Power = ifelse(NA_flag == "0" & pval_period1 < 0.1, Power_raw, NA),
+           Power_1d = zoo::rollmean(Power, k = 24, fill = NA),      # 1 day moving avg - 24
+           Power_7d = zoo::rollmean(Power, k = 24*7, fill = NA),    # 7 days moving avg - 24*7
+           Power_15d = zoo::rollmean(Power, k = 24*15, fill = NA))  # 15 days moving avg - 24*15
+  return(result)
+}
+
+# FOR VIZ
+wc_lag_img <- function(result_df){
+    
+  pivot_longer(result_df, 
+                 cols = c(Angle, Angle_1d, Angle_7d, Angle_15d),
+                 names_to = "Variable", 
+                 values_to = "Value") %>%
+    ggplot() +
+    geom_point(aes(date, 24*Value/(2*pi), col = Variable)) +
+    scale_color_manual(breaks=c("Angle", "Angle_1d", "Angle_7d", "Angle_15d"),
+                       values = c("#A0B1BA", "#045275", "#089099", "#7CCBA2")) + 
+    theme_bw() + ylab("Hours") + geom_abline(slope = 0, intercept = 0) + 
+    theme(legend.position="top",
+        axis.title.x = element_blank(),axis.text.x = element_text(size = 20),
+        axis.title.y = element_text(size = 20),axis.text.y = element_text(size = 20),
+        legend.title = element_blank(),legend.text = element_text(size = 20),
+        axis.ticks.x=element_blank())
+}
+
+
+
+
+# OLD
+wc_time_img <- function(df, resp_var){
+  # place 4 figs in a row
+  par(plt = c(0.1, 0.95, 0.15, 0.95))
+  par(mfrow=c(1,4))
+  
+  plot(24*df[["PAR"]]$Angle[201, ]/(2*pi), main = paste0(resp_var, " vs PAR"), ylab = "Hours", cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+  plot(24*df[["Ts"]]$Angle[201, ]/(2*pi), main = paste0(resp_var, " vs Ts"), ylab = "Hours", cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+  plot(24*df[["SWC"]]$Angle[201, ]/(2*pi), main = paste0(resp_var, " vs SWC"), ylab = "Hours", cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+  plot(24*df[["gs"]]$Angle[201, ]/(2*pi), main = paste0(resp_var, " vs gc"), ylab = "Hours", cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+ 
+  # reset
+  par(mfrow=c(1,1))
+}
+
+
+
+
+# summarize the result 
+wc_result_summary <- function(orig_df, resp_var, wc_sum_df){
+  
+  scale_pad_summary <- list()
+  
+  scale_pad_summary[["PAR"]] <- scale_pad(orig_df, resp_var, "PPFD_IN_1_1_1")
+  scale_pad_summary[["Ts"]] <- scale_pad(orig_df, resp_var, "TS_1_1_1")
+  scale_pad_summary[["SWC"]] <- scale_pad(orig_df, resp_var, "SWC_1_1_1")
+  scale_pad_summary[["gs"]] <- scale_pad(orig_df, resp_var, "gs_qaqc")
+  
+  results <- list()
+  
+  results[["PAR"]] <- coh_result(scale_pad_summary[["PAR"]], wc_sum_df$PAR)
+  results[["Ts"]] <- coh_result(scale_pad_summary[["Ts"]], wc_sum_df$Ts)
+  results[["SWC"]] <- coh_result(scale_pad_summary[["SWC"]], wc_sum_df$SWC)
+  results[["gs"]] <- coh_result(scale_pad_summary[["gs"]], wc_sum_df$gs)
+  
+  return(results)
+}
+
+                                              
+
+```
+
+
+```{r temp function}
+# gc has not been calculated for 2024
+# functions for only this reason
+wc_summary_temp <- function(df, resp_var){
+  
+  wc_results <- list()
+  
+  # wc result
+  wc_results[["PAR"]] <- coh(scale_pad(df, resp_var, "PPFD_IN_1_1_1"), resp_var, "PPFD_IN_1_1_1", 128)
+  wc_results[["Ts"]] <- coh(scale_pad(df, resp_var,"TS_1_1_1"), resp_var,"TS_1_1_1", 128)
+  wc_results[["SWC"]] <- coh(scale_pad(df, resp_var, "SWC_1_1_1"), resp_var, "SWC_1_1_1", 128)
+    return(wc_results)
+  }
+
+# this will generate all 4 plots one by one
+wc_img_gen_temp <- function(df, resp_var){
+ # par(mar=c(2,2,1.5,0.3)+0.1)
+  
+  wc_img(df[["PAR"]], paste0(resp_var, " vs PAR"))
+  wc_img(df[["Ts"]], paste0(resp_var, " vs Ts"))
+  wc_img(df[["SWC"]], paste0(resp_var, " vs SWC"))
+
+}
+
+wc_time_img_temp <- function(df, resp_var){
+  # place 4 figs in a row
+  par(plt = c(0.1, 0.95, 0.05, 0.95))
+  par(mfrow=c(1,3))
+  
+  plot(24*df[["PAR"]]$Angle[201, ]/(2*pi), main = paste0(resp_var, " vs PAR"), ylab = "Hours", cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+  plot(24*df[["Ts"]]$Angle[201, ]/(2*pi), main = paste0(resp_var, " vs Ts"), ylab = "Hours", cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+  plot(24*df[["SWC"]]$Angle[201, ]/(2*pi), main = paste0(resp_var, " vs SWC"), ylab = "Hours", cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+ 
+  # reset
+  par(mfrow=c(1,1))
+}
+
+wc_result_summary_temp <- function(orig_df, resp_var, wc_sum_df){
+  
+  scale_pad_summary <- list()
+  
+  scale_pad_summary[["PAR"]] <- scale_pad(orig_df, resp_var, "PPFD_IN_1_1_1")
+  scale_pad_summary[["Ts"]] <- scale_pad(orig_df, resp_var, "TS_1_1_1")
+  scale_pad_summary[["SWC"]] <- scale_pad(orig_df, resp_var, "SWC_1_1_1")
+  
+  results <- list()
+  
+  results[["PAR"]] <- coh_result(scale_pad_summary[["PAR"]], wc_sum_df$PAR)
+  results[["Ts"]] <- coh_result(scale_pad_summary[["Ts"]], wc_sum_df$Ts)
+  results[["SWC"]] <- coh_result(scale_pad_summary[["SWC"]], wc_sum_df$SWC)
+  
+  return(results)
+}
+```
+
+
+```{r Gapfilled data 2022}
+### SR_Rh_Spr22 ###
+apply(SR_Rh_Spr22,2,pMiss)
+# no gaps in SR and Rh but PAR
+
+SR_Rh_Spr22_fill_driver <-   
+  complete(mice(SR_Rh_Spr22 %>% 
+                  select(TS_1_1_1, TS_2_1_1, SWC_1_1_1, PPFD_IN_1_1_1), 
+                method = "rf")) 
+
+SR_Rh_Spr22_fill_v1<- 
+  cbind(SR_Rh_Spr22 %>% select(c(date, SR1, Rh, Ra1, gs_qaqc)), SR_Rh_Spr22_fill_driver)
+
+SR_Rh_Spr22_fill <- daily_q10(SR_Rh_Spr22_fill_v1) 
+
+write.csv(SR_Rh_Spr22_fill, "G:/My Drive/Research/Projects/DC_auto/Data/Gapfilled_data/SR_Rh_Spr22_fill.csv", row.names = F)
+
+# SR
+wc_SR_Spr22_fill <- wc_summary(SR_Rh_Spr22_fill, "SR")
+wc_img_gen(wc_SR_Spr22_fill, "SR")
+wc_SR_Spr22_fill_summary <- wc_result_summary(SR_Rh_Spr22_fill, "SR", wc_SR_Spr22_fill)
+
+
+save_to_csv(wc_SR_Spr22_fill_summary, dir, "wc_rSR_Spr22_fill_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_SR_Spr22_fill_summary$PAR),
+  wc_lag_img(wc_SR_Spr22_fill_summary$Ts),
+  wc_lag_img(wc_SR_Spr22_fill_summary$SWC),
+  wc_lag_img(wc_SR_Spr22_fill_summary$gs),
+  ncol = 4, common.legend = T
+)
+
+dir = "G:/My Drive/Research/Projects/DC_auto/Data/Result_csv/"
+
+# residual SR
+wc_rSR_Spr22_fill <- wc_summary(SR_Rh_Spr22_fill, "rSR")
+wc_img_gen(wc_rSR_Spr22_fill, "rSR")
+wc_rSR_Spr22_fill_summary <- wc_result_summary(SR_Rh_Spr22_fill, "rSR", wc_rSR_Spr22_fill)
+
+save_to_csv(wc_rSR_Spr22_fill_summary, dir, "wc_SR_Spr22_fill_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rSR_Spr22_fill_summary$PAR),
+  wc_lag_img(wc_rSR_Spr22_fill_summary$Ts),
+  wc_lag_img(wc_rSR_Spr22_fill_summary$SWC),
+  wc_lag_img(wc_rSR_Spr22_fill_summary$gs),
+  ncol = 4, common.legend = T
+)
+
+
+# Rh
+wc_Rh_Spr22_fill <- wc_summary(SR_Rh_Spr22_fill, "Rh")
+wc_img_gen(wc_Rh_Spr22_fill, "Rh")
+wc_Rh_Spr22_fill_summary <- wc_result_summary(SR_Rh_Spr22_fill, "Rh", wc_Rh_Spr22_fill)
+
+save_to_csv(wc_Rh_Spr22_fill_summary, dir, "wc_Rh_Spr22_fill_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_Rh_Spr22_fill_summary$PAR),
+  wc_lag_img(wc_Rh_Spr22_fill_summary$Ts),
+  wc_lag_img(wc_Rh_Spr22_fill_summary$SWC),
+  wc_lag_img(wc_Rh_Spr22_fill_summary$gs),
+  ncol = 4, common.legend = T)
+
+# residual Rh
+wc_rRh_Spr22_fill <- wc_summary(SR_Rh_Spr22_fill, "rRh")
+wc_img_gen(wc_rRh_Spr22_fill, "rRh")
+wc_rRh_Spr22_fill_summary <- wc_result_summary(SR_Rh_Spr22_fill, "rRh", wc_rRh_Spr22_fill)
+
+save_to_csv(wc_rRh_Spr22_fill_summary, dir, "wc_rRh_Spr22_fill_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRh_Spr22_fill_summary$PAR),
+  wc_lag_img(wc_rRh_Spr22_fill_summary$Ts),
+  wc_lag_img(wc_rRh_Spr22_fill_summary$SWC),
+  wc_lag_img(wc_rRh_Spr22_fill_summary$gs),
+  ncol = 4, common.legend = T
+)
+
+
+# Ra
+wc_Ra_Spr22_fill <- wc_summary(SR_Rh_Spr22_fill, "Ra")
+wc_img_gen(wc_Ra_Spr22_fill, "Ra")
+wc_Ra_Spr22_fill_summary <- wc_result_summary(SR_Rh_Spr22_fill, "Ra", wc_Ra_Spr22_fill)
+
+save_to_csv(wc_Ra_Spr22_fill_summary, dir, "wc_Ra_Spr22_fill_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_Ra_Spr22_fill_summary$PAR),
+  wc_lag_img(wc_Ra_Spr22_fill_summary$Ts),
+  wc_lag_img(wc_Ra_Spr22_fill_summary$SWC),
+  wc_lag_img(wc_Ra_Spr22_fill_summary$gs),
+  ncol = 4, common.legend = T)
+
+# residual Ra
+wc_rRa_Spr22_fill <- wc_summary(SR_Rh_Spr22_fill, "rRa")
+wc_img_gen(wc_rRa_Spr22_fill, "rRa")
+wc_rRa_Spr22_fill_summary <- wc_result_summary(SR_Rh_Spr22_fill, "rRa", wc_rRa_Spr22_fill)
+
+save_to_csv(wc_rRa_Spr22_fill_summary, dir, "wc_rRa_Spr22_fill_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRa_Spr22_fill_summary$PAR),
+  wc_lag_img(wc_rRa_Spr22_fill_summary$Ts),
+  wc_lag_img(wc_rRa_Spr22_fill_summary$SWC),
+  wc_lag_img(wc_rRa_Spr22_fill_summary$gs),
+  ncol = 4, common.legend = T
+)
+
+
+###################
+### SR_Rh_Wnt22 ###
+###################
+apply(SR_Rh_Wnt22,2,pMiss)
+
+# gapfill SR
+Wnt22_fill_SR <- 
+  SR_Rh_Wnt22 %>% 
+  Gapfill_ann(Flux = "SR1", var1 = "TS_1_1_1", var2 = "SWC_1_1_1", var3 = "PPFD_IN_1_1_1") 
+
+colnames(Wnt22_fill_SR)[17] <- "SR_filled"
+colnames(Wnt22_fill_SR)[18] <- "SR_mark"
+
+ggplot(Wnt22_fill_SR) + geom_point(aes(date, filled, col = as.character(mark))) +
+  theme_classic() + ggtitle("SR")
+
+# gapfill Rh
+Wnt22_fill_Rh <- 
+  SR_Rh_Wnt22 %>% 
+  Gapfill_ann(Flux = "Rh", var1 = "TS_1_1_1", var2 = "SWC_1_1_1", var3 = "PPFD_IN_1_1_1") 
+
+colnames(Wnt22_fill_Rh)[17] <- "Rh_filled"
+colnames(Wnt22_fill_Rh)[18] <- "Rh_mark"
+
+ggplot(Wnt22_fill_Rh) + geom_point(aes(date, filled, col = as.character(mark))) +
+  theme_classic() + ggtitle("Rh")
+
+SR_Rh_Wnt22_fill_temp <- 
+  left_join(SR_Rh_Wnt22 %>% select(-c(starts_with("SR"),"Rh", starts_with("Ra"))), Wnt22_fill_SR %>% select(c(date, SR_filled, SR_mark)), by = "date") %>%
+  left_join(Wnt22_fill_Rh %>% select(c(date, Rh_filled, Rh_mark)), by = "date") %>%
+  mutate(Ra_filled = SR_filled - Rh_filled)
+
+SR_Rh_Wnt22_fill <-
+  daily_q10(SR_Rh_Wnt22_fill_temp, "SR_filled", "Rh_filled", "Ra_filled")
+
+# save the filled df
+write.csv(SR_Rh_Wnt22_fill, "G:/My Drive/Research/Projects/DC_auto/Data/Gapfilled_data/SR_Rh_Wnt22_fill.csv", row.names = F)
+
+# SR
+wc_SR_Wnt22_fill <- wc_summary(SR_Rh_Wnt22_fill, "SR")
+wc_img_gen(wc_SR_Wnt22_fill, "SR")
+wc_SR_Wnt22_fill_summary <- wc_result_summary(SR_Rh_Wnt22_fill, "SR", wc_SR_Wnt22_fill)
+
+save_to_csv(wc_SR_Wnt22_fill_summary, dir, "wc_SR_Wnt22_fill_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_SR_Wnt22_fill_summary$PAR),
+  wc_lag_img(wc_SR_Wnt22_fill_summary$Ts),
+  wc_lag_img(wc_SR_Wnt22_fill_summary$SWC),
+  wc_lag_img(wc_SR_Wnt22_fill_summary$gs),
+  ncol = 4, common.legend = T
+)
+
+# residual SR
+wc_rSR_Wnt22_fill <- wc_summary(SR_Rh_Wnt22_fill, "rSR")
+wc_img_gen(wc_rSR_Wnt22_fill, "rSR")
+wc_rSR_Wnt22_fill_summary <- wc_result_summary(SR_Rh_Wnt22_fill, "rSR", wc_rSR_Wnt22_fill)
+
+save_to_csv(wc_rSR_Wnt22_fill_summary, dir, "wc_rSR_Wnt22_fill_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rSR_Wnt22_fill_summary$PAR),
+  wc_lag_img(wc_rSR_Wnt22_fill_summary$Ts),
+  wc_lag_img(wc_rSR_Wnt22_fill_summary$SWC),
+  wc_lag_img(wc_rSR_Wnt22_fill_summary$gs),
+  ncol = 4, common.legend = T
+)
+
+
+
+# Rh
+wc_Rh_Wnt22_fill <- wc_summary(SR_Rh_Wnt22_fill, "Rh")
+wc_img_gen(wc_Rh_Wnt22_fill, "Rh")
+wc_Rh_Wnt22_fill_summary <- wc_result_summary(SR_Rh_Wnt22_fill, "Rh", wc_Rh_Wnt22_fill)
+
+# write the result
+save_to_csv(wc_Rh_Wnt22_fill_summary, dir, "wc_Rh_Wnt22_fill_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_Rh_Wnt22_fill_summary$PAR),
+  wc_lag_img(wc_Rh_Wnt22_fill_summary$Ts),
+  wc_lag_img(wc_Rh_Wnt22_fill_summary$SWC),
+  wc_lag_img(wc_Rh_Wnt22_fill_summary$gs),
+  ncol = 4, common.legend = T)
+
+
+# residual Rh
+wc_rRh_Wnt22_fill <- wc_summary(SR_Rh_Wnt22_fill, "rRh")
+wc_img_gen(wc_rRh_Wnt22_fill, "rRh")
+wc_rRh_Wnt22_fill_summary <- wc_result_summary(SR_Rh_Wnt22_fill, "rRh", wc_rRh_Wnt22_fill)
+
+save_to_csv(wc_rRh_Wnt22_fill_summary, dir, "wc_rRh_Wnt22_fill_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRh_Wnt22_fill_summary$PAR),
+  wc_lag_img(wc_rRh_Wnt22_fill_summary$Ts),
+  wc_lag_img(wc_rRh_Wnt22_fill_summary$SWC),
+  wc_lag_img(wc_rRh_Wnt22_fill_summary$gs),
+  ncol = 4, common.legend = T
+)
+
+
+
+
+
+# Ra
+wc_Ra_Wnt22_fill <- wc_summary(SR_Rh_Wnt22_fill, "Ra")
+wc_img_gen(wc_Ra_Wnt22_fill, "Ra")
+wc_Ra_Wnt22_fill_summary <- wc_result_summary(SR_Rh_Wnt22_fill, "Ra", wc_Ra_Wnt22_fill)
+
+save_to_csv(wc_Ra_Wnt22_fill_summary, dir, "wc_Ra_Wnt22_fill_")
+
+
+# viz
+ggarrange(
+  wc_lag_img(wc_Ra_Wnt22_fill_summary$PAR),
+  wc_lag_img(wc_Ra_Wnt22_fill_summary$Ts),
+  wc_lag_img(wc_Ra_Wnt22_fill_summary$SWC),
+  wc_lag_img(wc_Ra_Wnt22_fill_summary$gs),
+  ncol = 4, common.legend = T)        
+
+# Residual Ra
+wc_rRa_Wnt22_fill <- wc_summary(SR_Rh_Wnt22_fill, "rRa")
+wc_img_gen(wc_Ra_Wnt22_fill, "rRa")
+wc_rRa_Wnt22_fill_summary <- wc_result_summary(SR_Rh_Wnt22_fill, "rRa", wc_rRa_Wnt22_fill)
+
+save_to_csv(wc_rRa_Wnt22_fill_summary, dir, "wc_rRa_Wnt22_fill_")
+
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRa_Wnt22_fill_summary$PAR),
+  wc_lag_img(wc_rRa_Wnt22_fill_summary$Ts),
+  wc_lag_img(wc_rRa_Wnt22_fill_summary$SWC),
+  wc_lag_img(wc_rRa_Wnt22_fill_summary$gs),
+  ncol = 4, common.legend = T)        
+```
+
+
+
+```{r gapfilled 2023}
+###################
+### SR_Rh_Spr23 ###
+###################
+
+apply(SR_Rh_Spr23,2,pMiss)
+
+Spr23_fill_SR <- 
+  SR_Rh_Spr23 %>% 
+  Gapfill_ann(Flux = "SR1", var1 = "TS_1_1_1", var2 = "SWC_1_1_1", var3 = "PPFD_IN_1_1_1") 
+
+colnames(Spr23_fill_SR)[17] <- "SR_filled"
+colnames(Spr23_fill_SR)[18] <- "SR_mark"
+
+ggplot(Spr23_fill_SR) + geom_point(aes(date, SR_filled, col = as.character(SR_mark))) +
+  theme_classic() + ggtitle("SR")
+
+Spr23_fill_Rh <- 
+  SR_Rh_Spr23 %>% 
+  Gapfill_ann(Flux = "Rh", var1 = "TS_1_1_1", var2 = "SWC_1_1_1", var3 = "PPFD_IN_1_1_1") 
+
+colnames(Spr23_fill_Rh)[17] <- "Rh_filled"
+colnames(Spr23_fill_Rh)[18] <- "Rh_mark"
+
+ggplot(Spr23_fill_Rh) + geom_point(aes(date, Rh_filled, col = as.character(Rh_mark))) +
+  theme_classic() + ggtitle("Rh")
+
+SR_Rh_Spr23_fill_temp <- 
+  left_join(SR_Rh_Spr23 %>% select(-c(starts_with("SR"),"Rh", starts_with("Ra"))),
+            Spr23_fill_SR %>% select(c(date, SR_filled, SR_mark)), by = "date") %>%
+  left_join(Spr23_fill_Rh %>% select(c(date, Rh_filled, Rh_mark)), by = "date") %>%
+  mutate(Ra_filled = SR_filled - Rh_filled)
+
+
+SR_Rh_Spr23_fill <-
+  daily_q10(SR_Rh_Spr23_fill_temp, "SR_filled", "Rh_filled", "Ra_filled")
+
+# save the filled df
+write.csv(SR_Rh_Spr23_fill, "G:/My Drive/Research/Projects/DC_auto/Data/Gapfilled_data/SR_Rh_Spr23_fill.csv", row.names = F)
+
+
+# SR
+wc_SR_Spr23_fill <- wc_summary(SR_Rh_Spr23_fill, "SR")
+wc_img_gen(wc_SR_Spr23_fill, "SR")
+wc_SR_Spr23_fill_summary <- wc_result_summary(SR_Rh_Spr23_fill, "SR", wc_SR_Spr23_fill)
+
+save_to_csv(wc_SR_Spr23_fill_summary, dir, "wc_SR_Spr23_fill_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_SR_Spr23_fill_summary$PAR),
+  wc_lag_img(wc_SR_Spr23_fill_summary$Ts),
+  wc_lag_img(wc_SR_Spr23_fill_summary$SWC),
+  wc_lag_img(wc_SR_Spr23_fill_summary$gs),
+  ncol = 4, common.legend = T
+)
+
+# residual SR
+wc_rSR_Spr23_fill <- wc_summary(SR_Rh_Spr23_fill, "rSR")
+wc_img_gen(wc_rSR_Spr23_fill, "rSR")
+wc_rSR_Spr23_fill_summary <- wc_result_summary(SR_Rh_Spr23_fill, "rSR", wc_rSR_Spr23_fill)
+
+save_to_csv(wc_rSR_Spr23_fill_summary , dir, "wc_rSR_Spr23_fill_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rSR_Spr23_fill_summary$PAR),
+  wc_lag_img(wc_rSR_Spr23_fill_summary$Ts),
+  wc_lag_img(wc_rSR_Spr23_fill_summary$SWC),
+  wc_lag_img(wc_rSR_Spr23_fill_summary$gs),
+  ncol = 4, common.legend = T
+)
+
+
+
+# Rh
+wc_Rh_Spr23_fill <- wc_summary(SR_Rh_Spr23_fill, "Rh")
+wc_img_gen(wc_Rh_Spr23_fill, "Rh")
+wc_Rh_Spr23_fill_summary <- wc_result_summary(SR_Rh_Spr23_fill, "Rh", wc_Rh_Spr23_fill)
+
+save_to_csv(wc_Rh_Spr23_fill_summary , dir, "wc_Rh_Spr23_fill_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_Rh_Spr23_fill_summary$PAR),
+  wc_lag_img(wc_Rh_Spr23_fill_summary$Ts),
+  wc_lag_img(wc_Rh_Spr23_fill_summary$SWC),
+  wc_lag_img(wc_Rh_Spr23_fill_summary$gs),
+  ncol = 4, common.legend = T)
+
+# residual Rh
+wc_rRh_Spr23_fill <- wc_summary(SR_Rh_Spr23_fill, "rRh")
+wc_img_gen(wc_rRh_Spr23_fill, "rRh")
+wc_rRh_Spr23_fill_summary <- wc_result_summary(SR_Rh_Spr23_fill, "rRh", wc_rRh_Spr23_fill)
+
+save_to_csv(wc_rRh_Spr23_fill_summary , dir, "wc_rRh_Spr23_fill_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRh_Spr23_fill_summary$PAR),
+  wc_lag_img(wc_rRh_Spr23_fill_summary$Ts),
+  wc_lag_img(wc_rRh_Spr23_fill_summary$SWC),
+  wc_lag_img(wc_rRh_Spr23_fill_summary$gs),
+  ncol = 4, common.legend = T)
+
+
+
+# Ra
+wc_Ra_Spr23_fill <- wc_summary(SR_Rh_Spr23_fill, "Ra")
+wc_img_gen(wc_Ra_Spr23_fill, "Ra")
+wc_Ra_Spr23_fill_summary <- wc_result_summary(SR_Rh_Spr23_fill, "Ra", wc_Ra_Spr23_fill)
+
+save_to_csv(wc_Ra_Spr23_fill_summary , dir, "wc_Ra_Spr23_fill_")
+
+
+# viz
+ggarrange(
+  wc_lag_img(wc_Ra_Spr23_fill_summary$PAR),
+  wc_lag_img(wc_Ra_Spr23_fill_summary$Ts),
+  wc_lag_img(wc_Ra_Spr23_fill_summary$SWC),
+  wc_lag_img(wc_Ra_Spr23_fill_summary$gs),
+  ncol = 4, common.legend = T)  
+
+
+# residual Ra
+wc_rRa_Spr23_fill <- wc_summary(SR_Rh_Spr23_fill, "rRa")
+wc_img_gen(wc_rRa_Spr23_fill, "rRa")
+wc_rRa_Spr23_fill_summary <- wc_result_summary(SR_Rh_Spr23_fill, "rRa", wc_rRa_Spr23_fill)
+
+save_to_csv(wc_rRa_Spr23_fill_summary , dir, "wc_rRa_Spr23_fill_")
+
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRa_Spr23_fill_summary$PAR),
+  wc_lag_img(wc_rRa_Spr23_fill_summary$Ts),
+  wc_lag_img(wc_rRa_Spr23_fill_summary$SWC),
+  wc_lag_img(wc_rRa_Spr23_fill_summary$gs),
+  ncol = 4, common.legend = T)
+
+
+
+
+### ### ### ### ### ### 
+### SR_Rh_Spr23_2&3 ###
+### ### ### ### ### ###
+
+apply(SR_Rh_Spr23_2_3,2,pMiss)
+
+Spr23_2_3_fill_SR <- 
+  SR_Rh_Spr23_2_3 %>% 
+  Gapfill_ann(Flux = "SR1", var1 = "TS_1_1_1", var2 = "SWC_1_1_1", var3 = "PPFD_IN_1_1_1") 
+
+colnames(Spr23_2_3_fill_SR)[17] <- "SR_filled"
+colnames(Spr23_2_3_fill_SR)[18] <- "SR_mark"
+
+ggplot(Spr23_2_3_fill_SR) + geom_point(aes(date, SR_filled, col = as.character(SR_mark))) +
+  theme_classic() + ggtitle("SR")
+
+Spr23_2_3_fill_Rh <- 
+  SR_Rh_Spr23_2_3 %>% 
+  mutate(Rh = ifelse(Rh > 10, NA, Rh)) %>%
+  Gapfill_ann(Flux = "Rh", var1 = "TS_1_1_1", var2 = "SWC_1_1_1", var3 = "PPFD_IN_1_1_1") 
+
+colnames(Spr23_2_3_fill_Rh)[17] <- "Rh_filled"
+colnames(Spr23_2_3_fill_Rh)[18] <- "Rh_mark"
+
+ggplot(Spr23_2_3_fill_Rh) + geom_point(aes(date, Rh_filled, col = as.character(Rh_mark))) +
+  theme_classic() + ggtitle("Rh")
+
+SR_Rh_Spr23_2_3_fill_temp <- 
+  left_join(SR_Rh_Spr23_2_3 %>% select(-c(starts_with("SR"),"Rh", starts_with("Ra"))),
+            Spr23_2_3_fill_SR %>% select(c(date, SR_filled, SR_mark)), by = "date") %>%
+  left_join(Spr23_2_3_fill_Rh %>% select(c(date, Rh_filled, Rh_mark)), by = "date") %>%
+  mutate(Ra_filled = SR_filled - Rh_filled)
+
+SR_Rh_Spr23_2_3_fill <-
+  daily_q10(SR_Rh_Spr23_2_3_fill_temp, "SR_filled", "Rh_filled", "Ra_filled")
+
+# save the filled df
+write.csv(SR_Rh_Spr23_2_3_fill, "G:/My Drive/Research/Projects/DC_auto/Data/Gapfilled_data/SR_Rh_Spr23-2&3_fill.csv", row.names = F)
+
+
+
+# SR
+wc_SR_Spr23_2_3_fill <- wc_summary(SR_Rh_Spr23_2_3_fill, "SR")
+wc_img_gen(wc_SR_Spr23_2_3_fill, "SR")
+wc_SR_Spr23_2_3_fill_summary <- wc_result_summary(SR_Rh_Spr23_2_3_fill, "SR", wc_SR_Spr23_2_3_fill)
+
+save_to_csv(wc_SR_Spr23_2_3_fill_summary , dir, "wc_SR_Spr23-2&3_fill_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_SR_Spr23_2_3_fill_summary$PAR),
+  wc_lag_img(wc_SR_Spr23_2_3_fill_summary$Ts),
+  wc_lag_img(wc_SR_Spr23_2_3_fill_summary$SWC),
+  wc_lag_img(wc_SR_Spr23_2_3_fill_summary$gs),
+  ncol = 4, common.legend = T
+)
+
+# residual SR
+wc_rSR_Spr23_2_3_fill <- wc_summary(SR_Rh_Spr23_2_3_fill, "rSR")
+wc_img_gen(wc_rSR_Spr23_2_3_fill, "rSR")
+wc_rSR_Spr23_2_3_fill_summary <- wc_result_summary(SR_Rh_Spr23_2_3_fill, "rSR", wc_rSR_Spr23_2_3_fill)
+
+save_to_csv(wc_rSR_Spr23_2_3_fill_summary, dir, "wc_rSR_Spr23_2_3_fill_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rSR_Spr23_2_3_fill_summary$PAR),
+  wc_lag_img(wc_rSR_Spr23_2_3_fill_summary$Ts),
+  wc_lag_img(wc_rSR_Spr23_2_3_fill_summary$SWC),
+  wc_lag_img(wc_rSR_Spr23_2_3_fill_summary$gs),
+  ncol = 4, common.legend = T
+)
+
+
+
+
+# Rh
+wc_Rh_Spr23_2_3_fill <- wc_summary(SR_Rh_Spr23_2_3_fill, "Rh")
+wc_img_gen(wc_Rh_Spr23_2_3_fill, "Rh")
+wc_Rh_Spr23_2_3_fill_summary <- wc_result_summary(SR_Rh_Spr23_2_3_fill, "Rh", wc_Rh_Spr23_2_3_fill)
+
+save_to_csv(wc_Rh_Spr23_2_3_fill_summary, dir, "wc_Rh_Spr23_2_3_fill_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_Rh_Spr23_2_3_fill_summary$PAR),
+  wc_lag_img(wc_Rh_Spr23_2_3_fill_summary$Ts),
+  wc_lag_img(wc_Rh_Spr23_2_3_fill_summary$SWC),
+  wc_lag_img(wc_Rh_Spr23_2_3_fill_summary$gs),
+  ncol = 4, common.legend = T)
+
+# residual Rh
+wc_rRh_Spr23_2_3_fill <- wc_summary(SR_Rh_Spr23_2_3_fill, "rRh")
+wc_img_gen(wc_rRh_Spr23_2_3_fill, "rRh")
+wc_rRh_Spr23_2_3_fill_summary <- wc_result_summary(SR_Rh_Spr23_2_3_fill, "rRh", wc_rRh_Spr23_2_3_fill)
+
+save_to_csv(wc_rRh_Spr23_2_3_fill_summary, dir, "wc_rRh_Spr23_2_3_fill_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRh_Spr23_2_3_fill_summary$PAR),
+  wc_lag_img(wc_rRh_Spr23_2_3_fill_summary$Ts),
+  wc_lag_img(wc_rRh_Spr23_2_3_fill_summary$SWC),
+  wc_lag_img(wc_rRh_Spr23_2_3_fill_summary$gs),
+  ncol = 4, common.legend = T
+)
+
+
+
+
+# Ra
+wc_Ra_Spr23_2_3_fill <- wc_summary(SR_Rh_Spr23_2_3_fill, "Ra")
+wc_img_gen(wc_Ra_Spr23_2_3_fill, "Ra")
+wc_Ra_Spr23_2_3_fill_summary <- wc_result_summary(SR_Rh_Spr23_2_3_fill, "Ra", wc_Ra_Spr23_2_3_fill)
+
+save_to_csv(wc_Ra_Spr23_2_3_fill_summary, dir, "wc_Ra_Spr23_2_3_fill_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_Ra_Spr23_2_3_fill_summary$PAR),
+  wc_lag_img(wc_Ra_Spr23_2_3_fill_summary$Ts),
+  wc_lag_img(wc_Ra_Spr23_2_3_fill_summary$SWC),
+  wc_lag_img(wc_Ra_Spr23_2_3_fill_summary$gs),
+  ncol = 4, common.legend = T)
+
+# residual Ra
+wc_rRa_Spr23_2_3_fill <- wc_summary(SR_Rh_Spr23_2_3_fill, "rRa")
+wc_img_gen(wc_rRa_Spr23_2_3_fill, "rRa")
+wc_rRa_Spr23_2_3_fill_summary <- wc_result_summary(SR_Rh_Spr23_2_3_fill, "Ra", wc_rRa_Spr23_2_3_fill)
+
+save_to_csv(wc_rRa_Spr23_2_3_fill_summary, dir, "wc_rRa_Spr23_2_3_fill_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRa_Spr23_2_3_fill_summary$PAR),
+  wc_lag_img(wc_rRa_Spr23_2_3_fill_summary$Ts),
+  wc_lag_img(wc_rRa_Spr23_2_3_fill_summary$SWC),
+  wc_lag_img(wc_rRa_Spr23_2_3_fill_summary$gs),
+  ncol = 4, common.legend = T)  
+
+```
+
+
+
+```{r gapfilled 2024}
+###################
+### SR_Rh_Wnt24 ###
+###################
+
+
+apply(SR_Rh_Wnt24,2,pMiss)
+
+Wnt24_fill_SR <- 
+  SR_Rh_Wnt24 %>% 
+  Gapfill_ann(Flux = "SR1", var1 = "TS_1_1_1", var2 = "SWC_1_1_1", var3 = "PPFD_IN_1_1_1") 
+
+colnames(Wnt24_fill_SR)[17] <- "SR_filled"
+colnames(Wnt24_fill_SR)[18] <- "SR_mark"
+
+ggplot(Wnt24_fill_SR) + geom_point(aes(date, SR_filled, col = as.character(SR_mark))) +
+  theme_classic() + ggtitle("SR")
+
+Wnt24_fill_Rh <- 
+  SR_Rh_Wnt24 %>% 
+  Gapfill_ann(Flux = "Rh", var1 = "TS_1_1_1", var2 = "SWC_1_1_1", var3 = "PPFD_IN_1_1_1") 
+
+colnames(Wnt24_fill_Rh)[17] <- "Rh_filled"
+colnames(Wnt24_fill_Rh)[18] <- "Rh_mark"
+
+ggplot(Wnt24_fill_Rh) + geom_point(aes(date, Rh_filled, col = as.character(Rh_mark))) +
+  theme_classic() + ggtitle("Rh")
+
+SR_Rh_Wnt24_fill_temp <- 
+  left_join(SR_Rh_Wnt24 %>% select(-c(starts_with("SR"),"Rh", starts_with("Ra"))),
+            Wnt24_fill_SR %>% select(c(date, SR_filled, SR_mark)), by = "date") %>%
+  left_join(Wnt24_fill_Rh %>% select(c(date, Rh_filled, Rh_mark)), by = "date") %>%
+  mutate(Ra_filled = SR_filled - Rh_filled)
+
+SR_Rh_Wnt24_fill <-
+  daily_q10(SR_Rh_Wnt24_fill_temp, "SR_filled", "Rh_filled", "Ra_filled")
+
+# save the filled df
+write.csv(SR_Rh_Wnt24_fill, "G:/My Drive/Research/Projects/DC_auto/Data/Gapfilled_data/SR_Rh_Wnt24_fill.csv", row.names = F)
+
+
+
+
+
+# SR
+wc_SR_Wnt24_fill <- wc_summary_temp(SR_Rh_Wnt24_fill, "SR")
+wc_img_gen_temp(wc_SR_Wnt24_fill, "SR")
+wc_SR_Wnt24_fill_summary <- wc_result_summary_temp(SR_Rh_Wnt24_fill, "SR", wc_SR_Wnt24_fill)
+
+save_to_csv(wc_SR_Wnt24_fill_summary, dir, "wc_SR_Wnt24_fill_")
+
+
+# viz
+ggarrange(
+  wc_lag_img(wc_SR_Wnt24_fill_summary$PAR),
+  wc_lag_img(wc_SR_Wnt24_fill_summary$Ts),
+  wc_lag_img(wc_SR_Wnt24_fill_summary$SWC),
+  ncol = 3, common.legend = T
+)
+
+# SR residual
+wc_rSR_Wnt24_fill <- wc_summary_temp(SR_Rh_Wnt24_fill, "rSR")
+wc_img_gen_temp(wc_rSR_Wnt24_fill, "rSR")
+wc_rSR_Wnt24_fill_summary <- wc_result_summary_temp(SR_Rh_Wnt24_fill, "SR", wc_rSR_Wnt24_fill)
+
+save_to_csv(wc_rSR_Wnt24_fill_summary, dir, "wc_rSR_Wnt24_fill_")
+
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rSR_Wnt24_fill_summary$PAR),
+  wc_lag_img(wc_rSR_Wnt24_fill_summary$Ts),
+  wc_lag_img(wc_rSR_Wnt24_fill_summary$SWC),
+  ncol = 3, common.legend = T
+)
+
+
+
+
+# Rh
+wc_Rh_Wnt24_fill <- wc_summary_temp(SR_Rh_Wnt24_fill, "Rh")
+wc_img_gen_temp(wc_Rh_Wnt24_fill, "Rh")
+wc_Rh_Wnt24_fill_summary <- wc_result_summary_temp(SR_Rh_Wnt24_fill, "Rh", wc_Rh_Wnt24_fill)
+
+save_to_csv(wc_Rh_Wnt24_fill_summary, dir, "wc_Rh_Wnt24_fill_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_Rh_Wnt24_fill_summary$PAR),
+  wc_lag_img(wc_Rh_Wnt24_fill_summary$Ts),
+  wc_lag_img(wc_Rh_Wnt24_fill_summary$SWC),
+  ncol = 3, common.legend = T)
+
+
+# Rh residual
+wc_rRh_Wnt24_fill <- wc_summary_temp(SR_Rh_Wnt24_fill, "rRh")
+wc_img_gen_temp(wc_rRh_Wnt24_fill, "rRh")
+wc_rRh_Wnt24_fill_summary <- wc_result_summary_temp(SR_Rh_Wnt24_fill, "rRh", wc_rRh_Wnt24_fill)
+
+save_to_csv(wc_rRh_Wnt24_fill_summary, dir, "wc_rRh_Wnt24_fill_")
+
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRh_Wnt24_fill_summary$PAR),
+  wc_lag_img(wc_rRh_Wnt24_fill_summary$Ts),
+  wc_lag_img(wc_rRh_Wnt24_fill_summary$SWC),
+  ncol = 3, common.legend = T
+)
+
+
+
+
+# Ra
+wc_Ra_Wnt24_fill <- wc_summary_temp(SR_Rh_Wnt24_fill, "Ra")
+wc_img_gen_temp(wc_Ra_Wnt24_fill, "Ra")
+wc_Ra_Wnt24_fill_summary <- wc_result_summary_temp(SR_Rh_Wnt24_fill, "Ra", wc_Ra_Wnt24_fill)
+
+save_to_csv(wc_Ra_Wnt24_fill_summary, dir, "wc_Ra_Wnt24_fill_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_Ra_Wnt24_fill_summary$PAR),
+  wc_lag_img(wc_Ra_Wnt24_fill_summary$Ts),
+  wc_lag_img(wc_Ra_Wnt24_fill_summary$SWC),
+  ncol = 3, common.legend = T)  
+
+
+# Ra residual
+wc_rRa_Wnt24_fill <- wc_summary_temp(SR_Rh_Wnt24_fill, "rRa")
+wc_img_gen_temp(wc_rRa_Wnt24_fill, "rRa")
+wc_rRa_Wnt24_fill_summary <- wc_result_summary_temp(SR_Rh_Wnt24_fill, "rRa", wc_rRa_Wnt24_fill)
+
+save_to_csv(wc_rRa_Wnt24_fill_summary, dir, "wc_rRa_Wnt24_fill_")
+
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRa_Wnt24_fill_summary$PAR),
+  wc_lag_img(wc_rRa_Wnt24_fill_summary$Ts),
+  wc_lag_img(wc_rRa_Wnt24_fill_summary$SWC),
+  ncol = 3, common.legend = T
+)
+
+
+
+###################
+### SR_Rh_Spr24 ###
+###################
+
+apply(SR_Rh_Spr24 ,2,pMiss)
+
+SR_Rh_Spr24_fill_driver <-   
+  complete(mice(SR_Rh_Spr24 %>% 
+                  select(TS_1_1_1, TS_2_1_1, SWC_1_1_1, PPFD_IN_1_1_1), 
+                method = "rf")) 
+SR_Rh_Spr24_fill_driver <- 
+  cbind(SR_Rh_Spr24 %>% select(c(date, SR, Rh, Ra)), 
+        SR_Rh_Spr24_fill_driver)
+
+
+
+Spr24_fill_SR <- 
+  SR_Rh_Spr24_fill_driver %>% 
+  Gapfill_ann(Flux = "SR", var1 = "TS_1_1_1", var2 = "SWC_1_1_1", var3 = "PPFD_IN_1_1_1") 
+
+colnames(Spr24_fill_SR)[9] <- "SR_filled"
+colnames(Spr24_fill_SR)[10] <- "SR_mark"
+
+ggplot(Spr24_fill_SR) + geom_point(aes(date, SR_filled, col = as.character(SR_mark))) +
+  theme_classic() + ggtitle("SR")
+
+Spr24_fill_Rh <- 
+  SR_Rh_Spr24_fill_driver %>% 
+  Gapfill_ann(Flux = "Rh", var1 = "TS_1_1_1", var2 = "SWC_1_1_1", var3 = "PPFD_IN_1_1_1") 
+
+colnames(Spr24_fill_Rh)[9] <- "Rh_filled"
+colnames(Spr24_fill_Rh)[10] <- "Rh_mark"
+
+ggplot(Spr24_fill_Rh) + geom_point(aes(date, Rh_filled, col = as.character(Rh_mark))) +
+  theme_classic() + ggtitle("Rh")
+
+SR_Rh_Spr24_fill_temp <- 
+  left_join(SR_Rh_Spr24 %>% select(-c(starts_with("SR"),"Rh", starts_with("Ra"))), Spr24_fill_SR %>% select(c(date, SR_filled, SR_mark)), by = "date") %>%
+  left_join(Spr24_fill_Rh %>% select(c(date, Rh_filled, Rh_mark)), by = "date") %>%
+  mutate(Ra_filled = SR_filled - Rh_filled)
+
+
+SR_Rh_Spr24_fill <-
+  daily_q10(SR_Rh_Spr24_fill_temp, "SR_filled", "Rh_filled", "Ra_filled")
+
+# save the filled df
+write.csv(SR_Rh_Spr24_fill, "G:/My Drive/Research/Projects/DC_auto/Data/Gapfilled_data/SR_Rh_Spr24_fill.csv", row.names = F)
+
+
+
+# SR
+wc_SR_Spr24_fill <- wc_summary_temp(SR_Rh_Spr24_fill, "SR")
+wc_img_gen_temp(wc_SR_Spr24_fill, "SR")
+wc_SR_Spr24_fill_summary <- wc_result_summary_temp(SR_Rh_Spr24_fill, "SR", wc_SR_Spr24_fill)
+
+# viz
+ggarrange(
+  wc_lag_img(wc_SR_Spr24_fill_summary$PAR),
+  wc_lag_img(wc_SR_Spr24_fill_summary$Ts),
+  wc_lag_img(wc_SR_Spr24_fill_summary$SWC),
+  ncol = 3, common.legend = T
+)
+
+save_to_csv(wc_SR_Spr24_fill_summary, dir, "wc_SR_Spr24_fill_")
+
+# residual SR
+wc_rSR_Spr24_fill <- wc_summary_temp(SR_Rh_Spr24_fill, "rSR")
+wc_img_gen_temp(wc_rSR_Spr24_fill, "rSR")
+wc_rSR_Spr24_fill_summary <- wc_result_summary_temp(SR_Rh_Spr24_fill, "rSR", wc_rSR_Spr24_fill)
+
+save_to_csv(wc_rSR_Spr24_fill_summary, dir, "wc_rSR_Spr24_fill_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rSR_Spr24_fill_summary$PAR),
+  wc_lag_img(wc_rSR_Spr24_fill_summary$Ts),
+  wc_lag_img(wc_rSR_Spr24_fill_summary$SWC),
+  ncol = 3, common.legend = T
+)
+
+
+
+
+
+# Rh
+wc_Rh_Spr24_fill <- wc_summary_temp(SR_Rh_Spr24_fill, "Rh")
+wc_img_gen_temp(wc_Rh_Spr24_fill, "Rh")
+wc_Rh_Spr24_fill_summary <- wc_result_summary_temp(SR_Rh_Spr24_fill, "Rh", wc_Rh_Spr24_fill)
+
+save_to_csv(wc_Rh_Spr24_fill_summary, dir, "wc_Rh_Spr24_fill_")
+# viz
+ggarrange(
+  wc_lag_img(wc_Rh_Spr24_fill_summary$PAR),
+  wc_lag_img(wc_Rh_Spr24_fill_summary$Ts),
+  wc_lag_img(wc_Rh_Spr24_fill_summary$SWC),
+  ncol = 3, common.legend = T)
+
+# residual Rh
+wc_rRh_Spr24_fill <- wc_summary_temp(SR_Rh_Spr24_fill, "rRh")
+wc_img_gen_temp(wc_rRh_Spr24_fill, "rRh")
+wc_rRh_Spr24_fill_summary <- wc_result_summary_temp(SR_Rh_Spr24_fill, "rRh", wc_rRh_Spr24_fill)
+
+save_to_csv(wc_rRh_Spr24_fill_summary, dir, "wc_rRh_Spr24_fill_")
+# viz
+ggarrange(
+  wc_lag_img(wc_rRh_Spr24_fill_summary$PAR),
+  wc_lag_img(wc_rRh_Spr24_fill_summary$Ts),
+  wc_lag_img(wc_rRh_Spr24_fill_summary$SWC),
+  ncol = 3, common.legend = T)
+
+
+# Ra
+wc_Ra_Spr24_fill <- wc_summary_temp(SR_Rh_Spr24_fill, "Ra")
+wc_img_gen_temp(wc_Ra_Spr24_fill, "Ra")
+wc_Ra_Spr24_fill_summary <- wc_result_summary_temp(SR_Rh_Spr24_fill, "Ra", wc_Ra_Spr24_fill)
+
+save_to_csv(wc_Ra_Spr24_fill_summary, dir, "wc_Ra_Spr24_fill_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_Ra_Spr24_fill_summary$PAR),
+  wc_lag_img(wc_Ra_Spr24_fill_summary$Ts),
+  wc_lag_img(wc_Ra_Spr24_fill_summary$SWC),
+  ncol = 3, common.legend = T) 
+
+# Residual Ra
+wc_rRa_Spr24_fill <- wc_summary_temp(SR_Rh_Spr24_fill, "rRa")
+wc_img_gen_temp(wc_Ra_Spr24_fill, "rRa")
+wc_rRa_Spr24_fill_summary <- wc_result_summary_temp(SR_Rh_Spr24_fill, "Ra", wc_rRa_Spr24_fill)
+
+save_to_csv(wc_rRa_Spr24_fill_summary, dir, "wc_rRa_Spr24_fill_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRa_Spr24_fill_summary$PAR),
+  wc_lag_img(wc_rRa_Spr24_fill_summary$Ts),
+  wc_lag_img(wc_rRa_Spr24_fill_summary$SWC),
+  ncol = 3, common.legend = T)
+
+```
+
+
+
+
+```{r Raw data 2022}
+### Spr22 ###
+
+# SR
+wc_SR_Spr22 <- wc_summary(SR_Rh_Spr22, "SR1")
+wc_img_gen(wc_SR_Spr22, "SR")
+wc_SR_Spr22_summary <- wc_result_summary(SR_Rh_Spr22, "SR1", wc_SR_Spr22)
+
+# viz
+ggarrange(
+  wc_lag_img(wc_SR_Spr22_summary$PAR),
+  wc_lag_img(wc_SR_Spr22_summary$Ts),
+  wc_lag_img(wc_SR_Spr22_summary$SWC),
+  wc_lag_img(wc_SR_Spr22_summary$gs),
+  ncol = 4, common.legend = T
+)
+
+# Rh
+wc_Rh_Spr22 <- wc_summary(SR_Rh_Spr22, "Rh")
+wc_img_gen(wc_Rh_Spr22, "Rh")
+wc_Rh_Spr22_summary <- wc_result_summary(SR_Rh_Spr22, "Rh", wc_Rh_Spr22)
+
+# viz
+ggarrange(
+  wc_lag_img(wc_Rh_Spr22_summary$PAR),
+  wc_lag_img(wc_Rh_Spr22_summary$Ts),
+  wc_lag_img(wc_Rh_Spr22_summary$SWC),
+  wc_lag_img(wc_Rh_Spr22_summary$gs),
+  ncol = 4, common.legend = T)
+
+# Ra
+wc_Ra_Spr22 <- wc_summary(SR_Rh_Spr22, "Ra1")
+wc_img_gen(wc_Ra_Spr22, "Ra")
+wc_Ra_Spr22_summary <- wc_result_summary(SR_Rh_Spr22, "Ra1", wc_Ra_Spr22)
+
+# viz
+ggarrange(
+  wc_lag_img(wc_Ra_Spr22_summary$PAR),
+  wc_lag_img(wc_Ra_Spr22_summary$Ts),
+  wc_lag_img(wc_Ra_Spr22_summary$SWC),
+  wc_lag_img(wc_Ra_Spr22_summary$gs),
+  ncol = 4, common.legend = T)
+
+
+
+
+
+
+### Wnt22 ###
+
+# SR
+wc_SR_Wnt22 <- wc_summary(SR_Rh_Wnt22, "SR1")
+wc_img_gen(wc_SR_Wnt22, "SR")
+wc_SR_Wnt22_summary <- wc_result_summary(SR_Rh_Wnt22, "SR1", wc_SR_Wnt22)
+
+# viz
+ggarrange(
+  wc_lag_img(wc_SR_Wnt22_summary$PAR),
+  wc_lag_img(wc_SR_Wnt22_summary$Ts),
+  wc_lag_img(wc_SR_Wnt22_summary$SWC),
+  wc_lag_img(wc_SR_Wnt22_summary$gs),
+  ncol = 4, common.legend = T)
+
+
+
+# Rh
+wc_Rh_Wnt22 <- wc_summary(SR_Rh_Wnt22, "Rh")
+wc_img_gen(wc_Rh_Wnt22, "Rh")
+wc_Rh_Wnt22_summary <- wc_result_summary(SR_Rh_Wnt22, "Rh", wc_Rh_Wnt22)
+
+# viz
+ggarrange(
+  wc_lag_img(wc_Rh_Wnt22_summary$PAR),
+  wc_lag_img(wc_Rh_Wnt22_summary$Ts),
+  wc_lag_img(wc_Rh_Wnt22_summary$SWC),
+  wc_lag_img(wc_Rh_Wnt22_summary$gs),
+  ncol = 4, common.legend = T)
+
+
+
+# Ra
+wc_Ra_Wnt22 <- wc_summary(SR_Rh_Wnt22, "Ra1")
+wc_img_gen(wc_Ra_Wnt22, "Ra")
+wc_Ra_Wnt22_summary <- wc_result_summary(SR_Rh_Wnt22, "Rh", wc_Ra_Wnt22)
+
+# viz
+ggarrange(
+  wc_lag_img(wc_Ra_Wnt22_summary$PAR),
+  wc_lag_img(wc_Ra_Wnt22_summary$Ts),
+  wc_lag_img(wc_Ra_Wnt22_summary$SWC),
+  wc_lag_img(wc_Ra_Wnt22_summary$gs),
+  ncol = 4, common.legend = T)
+```
+
+```{r Raw data 2023}
+### Spr23 ###
+
+# SR
+wc_SR_Spr23 <- wc_summary(SR_Rh_Spr23, "SR1")
+wc_img_gen(wc_SR_Spr23, "SR")
+wc_SR_Spr23_summary <- wc_result_summary(SR_Rh_Spr23, "SR1", wc_SR_Spr23)
+
+# viz
+ggarrange(
+  wc_lag_img(wc_SR_Spr23_summary$PAR),
+  wc_lag_img(wc_SR_Spr23_summary$Ts),
+  wc_lag_img(wc_SR_Spr23_summary$SWC),
+  wc_lag_img(wc_SR_Spr23_summary$gs),
+  ncol = 4, common.legend = T
+)
+
+# Rh
+wc_Rh_Spr23 <- wc_summary(SR_Rh_Spr23, "Rh")
+wc_img_gen(wc_Rh_Spr23, "Rh")
+wc_Rh_Spr23_summary <- wc_result_summary(SR_Rh_Spr23, "Rh", wc_Rh_Spr23)
+
+# viz
+ggarrange(
+  wc_lag_img(wc_Rh_Spr23_summary$PAR),
+  wc_lag_img(wc_Rh_Spr23_summary$Ts),
+  wc_lag_img(wc_Rh_Spr23_summary$SWC),
+  wc_lag_img(wc_Rh_Spr23_summary$gs),
+  ncol = 4, common.legend = T)
+
+# Ra
+wc_Ra_Spr23 <- wc_summary(SR_Rh_Spr23, "Ra1")
+wc_img_gen(wc_Ra_Spr23, "Ra")
+wc_Ra_Spr23_summary <- wc_result_summary(SR_Rh_Spr23, "Ra1", wc_Ra_Spr23)
+
+# viz
+ggarrange(
+  wc_lag_img(wc_Ra_Spr23_summary$PAR),
+  wc_lag_img(wc_Ra_Spr23_summary$Ts),
+  wc_lag_img(wc_Ra_Spr23_summary$SWC),
+  wc_lag_img(wc_Ra_Spr23_summary$gs),
+  ncol = 4, common.legend = T)
+
+
+
+### Spr23-2 ###
+
+# SR
+wc_SR_Spr23_2 <- wc_summary(SR_Rh_Spr23_2, "SR1")
+wc_img_gen(wc_SR_Spr23_2, "SR")
+wc_SR_Spr23_2_summary <- wc_result_summary(SR_Rh_Spr23_2, "SR1", wc_SR_Spr23_2)
+
+# viz
+ggarrange(
+  wc_lag_img(wc_SR_Spr23_2_summary$PAR),
+  wc_lag_img(wc_SR_Spr23_2_summary$Ts),
+  wc_lag_img(wc_SR_Spr23_2_summary$SWC),
+  wc_lag_img(wc_SR_Spr23_2_summary$gs),
+  ncol = 4, common.legend = T
+)
+
+# Rh
+wc_Rh_Spr23_2 <- wc_summary(SR_Rh_Spr23_2, "Rh")
+wc_img_gen(wc_Rh_Spr23_2, "Rh")
+wc_Rh_Spr23_2_summary <- wc_result_summary(SR_Rh_Spr23_2, "Rh", wc_Rh_Spr23_2)
+
+# viz
+ggarrange(
+  wc_lag_img(wc_Rh_Spr23_2_summary$PAR),
+  wc_lag_img(wc_Rh_Spr23_2_summary$Ts),
+  wc_lag_img(wc_Rh_Spr23_2_summary$SWC),
+  wc_lag_img(wc_Rh_Spr23_2_summary$gs),
+  ncol = 4, common.legend = T)
+
+# Ra
+wc_Ra_Spr23_2 <- wc_summary(SR_Rh_Spr23_2, "Ra1")
+wc_img_gen(wc_Ra_Spr23_2, "Ra")
+wc_Ra_Spr23_2_summary <- wc_result_summary(SR_Rh_Spr23_2, "Ra1", wc_Ra_Spr23_2)
+
+# viz
+ggarrange(
+  wc_lag_img(wc_Ra_Spr23_2_summary$PAR),
+  wc_lag_img(wc_Ra_Spr23_2_summary$Ts),
+  wc_lag_img(wc_Ra_Spr23_2_summary$SWC),
+  wc_lag_img(wc_Ra_Spr23_2_summary$gs),
+  ncol = 4, common.legend = T)
+
+
+
+
+### Spr23-3 ###
+
+# SR
+wc_SR_Spr23_3 <- wc_summary(SR_Rh_Spr23_3, "SR1")
+wc_img_gen(wc_SR_Spr23_3, "SR")
+wc_SR_Spr23_3_summary <- wc_result_summary(SR_Rh_Spr23_3, "SR1", wc_SR_Spr23_3)
+
+# viz
+ggarrange(
+  wc_lag_img(wc_SR_Spr23_3_summary$PAR),
+  wc_lag_img(wc_SR_Spr23_3_summary$Ts),
+  wc_lag_img(wc_SR_Spr23_3_summary$SWC),
+  wc_lag_img(wc_SR_Spr23_3_summary$gs),
+  ncol = 4, common.legend = T
+)
+
+# Rh
+wc_Rh_Spr23_3 <- wc_summary(SR_Rh_Spr23_3, "Rh")
+wc_img_gen(wc_Rh_Spr23_3, "Rh")
+wc_Rh_Spr23_3_summary <- wc_result_summary(SR_Rh_Spr23_3, "Rh", wc_Rh_Spr23_3)
+
+# viz
+ggarrange(
+  wc_lag_img(wc_Rh_Spr23_3_summary$PAR),
+  wc_lag_img(wc_Rh_Spr23_3_summary$Ts),
+  wc_lag_img(wc_Rh_Spr23_3_summary$SWC),
+  wc_lag_img(wc_Rh_Spr23_3_summary$gs),
+  ncol = 4, common.legend = T)
+
+# Ra
+wc_Ra_Spr23_3 <- wc_summary(SR_Rh_Spr23_3, "Ra1")
+wc_img_gen(wc_Ra_Spr23_3, "Ra")
+wc_Ra_Spr23_3_summary <- wc_result_summary(SR_Rh_Spr23_3, "Ra1", wc_Ra_Spr23_3)
+
+# viz
+ggarrange(
+  wc_lag_img(wc_Ra_Spr23_3_summary$PAR),
+  wc_lag_img(wc_Ra_Spr23_3_summary$Ts),
+  wc_lag_img(wc_Ra_Spr23_3_summary$SWC),
+  wc_lag_img(wc_Ra_Spr23_3_summary$gs),
+  ncol = 4, common.legend = T)
+
+```
+
+
+```{r Raw data 2024}
+### winter 24
+
+# SR
+wc_SR_Wnt24 <- wc_summary_temp(SR_Rh_Wnt24, "SR1")
+wc_img_gen_temp(wc_SR_Wnt24, "SR")
+wc_SR_Wnt24_summary <- wc_result_summary_temp(SR_Rh_Wnt24, "SR1", wc_SR_Wnt24)
+
+# viz
+ggarrange(
+  wc_lag_img(wc_SR_Wnt24_summary $PAR),
+  wc_lag_img(wc_SR_Wnt24_summary $Ts),
+  wc_lag_img(wc_SR_Wnt24_summary $SWC),
+  ncol = 3, common.legend = T
+)
+
+
+# Rh
+wc_Rh_Wnt24 <- wc_summary_temp(SR_Rh_Wnt24, "Rh")
+wc_img_gen_temp(wc_Rh_Wnt24, "Rh")
+wc_Rh_Wnt24_summary <- wc_result_summary_temp(SR_Rh_Wnt24, "Rh", wc_Rh_Wnt24)
+
+# viz
+ggarrange(
+  wc_lag_img(wc_Rh_Wnt24_summary $PAR),
+  wc_lag_img(wc_Rh_Wnt24_summary $Ts),
+  wc_lag_img(wc_Rh_Wnt24_summary $SWC),
+  ncol = 3, common.legend = T
+)
+
+# Ra
+wc_Ra_Wnt24 <- wc_summary_temp(SR_Rh_Wnt24, "Ra1")
+wc_img_gen_temp(wc_Ra_Wnt24, "Ra")
+wc_Ra_Wnt24_summary <- wc_result_summary_temp(SR_Rh_Wnt24, "Ra1", wc_Ra_Wnt24)
+
+
+# viz
+ggarrange(
+  wc_lag_img(wc_Ra_Wnt24_summary $PAR),
+  wc_lag_img(wc_Ra_Wnt24_summary $Ts),
+  wc_lag_img(wc_Ra_Wnt24_summary $SWC),
+  ncol = 3, common.legend = T
+)
+
+
+
+
+### Spr24
+
+# SR
+wc_SR_Spr24 <- wc_summary_temp(SR_Rh_Spr24, "SR")
+wc_img_gen_temp(wc_SR_Spr24, "SR")
+wc_SR_Spr24_summary <- wc_result_summary_temp(SR_Rh_Spr24, "SR", wc_SR_Spr24)
+
+# viz
+ggarrange(
+  wc_lag_img(wc_SR_Spr24_summary$PAR),
+  wc_lag_img(wc_SR_Spr24_summary$Ts),
+  wc_lag_img(wc_SR_Spr24_summary$SWC),
+  ncol = 3, common.legend = T
+)
+
+
+# Rh
+wc_Rh_Spr24 <- wc_summary_temp(SR_Rh_Spr24, "Rh")
+wc_img_gen_temp(wc_Rh_Spr24, "Rh")
+wc_Rh_Spr24_summary <- wc_result_summary_temp(SR_Rh_Spr24, "Rh", wc_Rh_Spr24)
+
+# viz
+ggarrange(
+  wc_lag_img(wc_Rh_Spr24_summary $PAR),
+  wc_lag_img(wc_Rh_Spr24_summary $Ts),
+  wc_lag_img(wc_Rh_Spr24_summary $SWC),
+  ncol = 3, common.legend = T
+)
+
+# Ra
+wc_Ra_Spr24 <- wc_summary_temp(SR_Rh_Spr24, "Ra")
+wc_img_gen_temp(wc_Ra_Spr24, "Ra")
+wc_Ra_Spr24_summary <- wc_result_summary_temp(SR_Rh_Spr24, "Ra", wc_Ra_Spr24)
+
+
+# viz
+ggarrange(
+  wc_lag_img(wc_Ra_Spr24_summary $PAR),
+  wc_lag_img(wc_Ra_Spr24_summary $Ts),
+  wc_lag_img(wc_Ra_Spr24_summary $SWC),
+  ncol = 3, common.legend = T
+)
+```
+
+```{r CWA only SR}
+# for SR 2023
+SR_grow23_SR_PAR <- coh(scale_pad(SR_grow23), "SR1", "PPFD_IN_1_1_1", 128)
+SR_grow23_SR_Ts <- coh(scale_pad(SR_grow23), "SR1","TS_1_1_1", 128)
+SR_grow23_SR_SWC <- coh(scale_pad(SR_grow23), "SR1", "SWC_1_1_1", 128)
+SR_grow23_SR_gs <- coh(scale_pad(SR_grow23), "SR1", "gs_qaqc", 128)
+
+
+
+
+
+
+# for SR 2024
+SR24_SR_PAR <- coh(xwt_SR_Rh24, "SR_filled", "PPFD_1_1_1", 128)
+SR24_SR_Ts <- coh(xwt_SR_Rh24, "SR_filled", "Ts_1_1_1", 128)
+SR24_SR_SWC <- coh(xwt_SR_Rh24, "SR_filled", "SWC_1_1_1", 128)
+
+# for Ra 2024
+SR24_Ra_PAR <- coh(xwt_SR_Rh24, "Ra_imp", "PPFD_1_1_1", 128)
+SR24_Ra_Ts <- coh(xwt_SR_Rh24, "Ra_imp", "Ts_1_1_1", 128)
+SR24_Ra_SWC <- coh(xwt_SR_Rh24, "Ra_imp", "SWC_1_1_1", 128)
+
+# for Rh 2024
+SR24_Rh_PAR <- coh(xwt_SR_Rh24, "Rh_filled", "PPFD_1_1_1", 128)
+SR24_Rh_Ts <- coh(xwt_SR_Rh24, "Rh_filled", "Ts_1_1_1", 128)
+SR24_Rh_SWC <- coh(xwt_SR_Rh24, "Rh_filled", "SWC_1_1_1", 128)
+
+
+# for SR 2022
+SR_may22_SR_PAR <- coh(xwt_SR_Rhmay22, "SR_filled", "PPFD_IN_1_1_1", 128)
+SR_may22_SR_Ts <- coh(xwt_SR_Rhmay22, "SR_filled", "TS_1_1_1", 128)
+SR_may22_SR_SWC <- coh(xwt_SR_Rhmay22, "SR_filled", "SWC_1_1_1", 128)
+
+# for Ra 2022
+SR24_Ra_PAR <- coh(xwt_SR_Rh24, "Ra_imp", "PPFD_1_1_1", 128)
+SR24_Ra_Ts <- coh(xwt_SR_Rh24, "Ra_imp", "Ts_1_1_1", 128)
+SR24_Ra_SWC <- coh(xwt_SR_Rh24, "Ra_imp", "SWC_1_1_1", 128)
+
+# for Rh 2022
+SR24_Rh_PAR <- coh(xwt_SR_Rh24, "Rh_filled", "PPFD_1_1_1", 128)
+SR24_Rh_Ts <- coh(xwt_SR_Rh24, "Rh_filled", "Ts_1_1_1", 128)
+SR24_Rh_SWC <- coh(xwt_SR_Rh24, "Rh_filled", "SWC_1_1_1", 128)
+
+
+
+
+
+
+## Heat plot of the cross-wavelet power spectrum:
+# for SR 2023
+wc_img(SR_grow23_SR_PAR, "SR vs PAR")
+wc_img(SR_grow23_SR_Ts, "SR vs Ts")
+wc_img(SR_grow23_SR_SWC, "SR vs SWC")
+wc_img(SR_grow23_SR_gs, "SR vs gs")
+
+# for SR 2024
+wc_img(SR24_SR_PAR, "SR vs PAR")
+wc_img(SR24_SR_Ts, "SR vs Ts")
+wc_img(SR24_SR_SWC, "SR vs SWC")
+
+# for Ra 2024
+wc_img(SR24_Ra_PAR, "Ra vs PAR")
+
+wc_img(SR24_Ra_Ts, "Ra vs Ts")
+wc_img(SR24_Ra_SWC, "Ra vs SWC")
+
+# for Rh 2024
+wc_img(SR24_Rh_PAR, "Rh vs PAR")
+wc_img(SR24_Rh_Ts, "Rh vs Ts")
+wc_img(SR24_Rh_SWC, "Rh vs SWC")
+
+
+# for SR 2022
+wc_img(SR_may22_SR_PAR, "SR vs PAR")
+wc_img(SR_may22_SR_Ts, "SR vs Ts")
+wc_img(SR24_SR_SWC, "SR vs SWC")
+
+# for Ra 2024
+wc_img(SR24_Ra_PAR, "Ra vs PAR")
+wc_img(SR24_Ra_Ts, "Ra vs Ts")
+wc_img(SR24_Ra_SWC, "Ra vs SWC")
+
+# for Rh 2024
+wc_img(SR24_Rh_PAR, "Rh vs PAR")
+wc_img(SR24_Rh_Ts, "Rh vs Ts")
+wc_img(SR24_Rh_SWC, "Rh vs SWC")
+
+
+# For 2023 SR
+wc.avg(SR23_SR_PAR, siglvl = 0.05, sigcol = "red", sigpch = 20, periodlab = "period (days)")
+wc.avg(SR23_SR_Ts, siglvl = 0.05, sigcol = "red", sigpch = 20, periodlab = "period (days)", legend.coords = "bottomright")
+wc.avg(SR23_SR_SWC, siglvl = 0.05, sigcol = "red", sigpch = 20, periodlab = "period (days)", legend.coords = "bottomright")
+
+# For 2024 SR
+wc.avg(SR24_SR_PAR, siglvl = 0.05, sigcol = "red", sigpch = 20, periodlab = "period (days)", main = "SR vs PAR")
+wc.avg(SR24_SR_Ts, siglvl = 0.05, sigcol = "red", sigpch = 20, periodlab = "period (days)", main = "SR vs Ts")
+wc.avg(SR24_SR_SWC, siglvl = 0.05, sigcol = "red", sigpch = 20, periodlab = "period (days)", main = "SR vs SWC")
+
+# For 2024 Ra
+wc.avg(SR24_Ra_PAR, siglvl = 0.05, sigcol = "red", sigpch = 20, periodlab = "period (days)", main = "Ra vs PAR")
+wc.avg(SR24_Ra_Ts, siglvl = 0.05, sigcol = "red", sigpch = 20, periodlab = "period (days)", main = "Ra vs Ts")
+wc.avg(SR24_Ra_SWC, siglvl = 0.05, sigcol = "red", sigpch = 20, periodlab = "period (days)", main = "Ra vs SWC")
+
+# For 2024 Rh
+wc.avg(SR24_Rh_PAR, siglvl = 0.05, sigcol = "red", sigpch = 20, periodlab = "period (days)", main = "Rh vs PAR")
+wc.avg(SR24_Rh_Ts, siglvl = 0.05, sigcol = "red", sigpch = 20, periodlab = "period (days)", main = "Rh vs Ts")
+wc.avg(SR24_Rh_SWC, siglvl = 0.05, sigcol = "red", sigpch = 20, periodlab = "period (days)", main = "Rh vs SWC")
+
+
+# At the period 1
+SR23_SR_PAR.period1 = SR23_SR_PAR$Angle[201, ]
+24*mean(SR23_SR_PAR.period1)/(2*pi)
+plot(24*SR23_SR_PAR$Angle[201, ]/(2*pi))
+
+SR23_SR_Ts.period1 = SR23_SR_Ts$Angle[201, ]
+24*mean(SR23_SR_Ts.period1)/(2*pi)
+plot(24*SR23_SR_Ts$Angle[201, ]/(2*pi))
+
+
+# Ra vs PAR
+SR24_Ra_PAR.period1 = SR24_Ra_PAR$Angle[201, ]
+24*mean(SR24_Ra_PAR.period1)/(2*pi)
+plot(24*SR24_Ra_PAR$Angle[201, ]/(2*pi))
+
+# Rh vs PAR
+SR24_Rh_PAR.period1 = SR24_Rh_PAR$Angle[201, ]
+24*mean(SR24_Rh_PAR.period1)/(2*pi)
+plot(24*SR24_Rh_PAR$Angle[201, ]/(2*pi))
+
+# Rh vs SWC
+SR24_Rh_SWC.period1 = SR24_Rh_PAR$Angle[201, ]
+24*mean(SR24_Rh_SWC.period1)/(2*pi)
+plot(24*SR24_Rh_SWC$Angle[201, ]/(2*pi))
+
+# Rh vs Ts
+SR24_Rh_Ts.period1 = SR24_Rh_PAR$Angle[201, ]
+24*mean(SR24_Rh_Ts.period1)/(2*pi)
+plot(24*SR24_Rh_Ts$Angle[201, ]/(2*pi))
+```
+
+
+
+
+
+
+
