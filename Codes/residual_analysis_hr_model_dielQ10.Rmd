@@ -1,0 +1,1053 @@
+---
+title: "wavelet angle test"
+author: "Moeka"
+date: "2024-07-04"
+output: github_document
+---
+wavelet analysis: chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj/http://www.hs-stat.com/projects/WaveletComp/WaveletComp_guided_tour.pdf
+
+- would it be better after deciding the period when thinking about the range??
+- Normalization
+All time series should be normalized to have zero mean and unit variance prior to wavelet analysis.  
+
+- Gaps
+Missing values in all the variables should be padded with zeros.
+
+- results files are at DC_auto > Data > result_pad_64d_res
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(WaveletComp)
+library(lubridate)
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(tidyr)
+library(broom)
+library(forestmangr)
+library(gridExtra)
+library(mice)
+library(purrr)
+library(FluxGapsR)
+library(missRanger)
+```
+
+
+```{r read a df}
+setwd("G:/My Drive/Research/Projects/DC_auto/Data")
+
+# read the dataframe - check the CRK_cont_SR_qaqc.Rmd for the quqa steps
+SR_tower <- 
+  read.csv("CRK_SR_tower_combined.csv", header = T) %>%
+  mutate(Datetime_hr_CST = as_datetime(Datetime_hr_CST, tz = "Etc/GMT+6"))
+
+```
+
+- SR & Rh to use
+- Spring 22 (M1-2): 2022-05-22 11:00:00 ~ 2022-06-09 15:00:00
+- Winter 23 (M11): 2023-03-15 20:00:00 ~ 2023-04-05 19:00:00
+- Spring 23 (M0-1): 2023-05-01 01:00:00 ~ 2023-06-06 14:00:00
+- Winter 24 (M3): 2024-01-24 ~ 2024-02-05
+- Winter 24-2 (M4-5): 2024-02-20 ~ 2024-03-20
+- Spring 24 (M5-6):  2024-03-21 ~ 2024-04-27
+
+- Don't use either due to too short or bad quality
+- Winter 22 (M7): 2022-11-23 ~ 2022-11-30 (1 week)
+ 
+
+- Only SR
+- Spr22: End of Apr - 2022-05-22 10:00:00
+- Fall22: Mid Aug - Beginning of Oct 
+* 1 week gap in the end of August
+- Grow23: 2023-03-10 ~ 2023-08-27 20:00:00 
+
+
+
+
+```{r Extract the period of study}
+
+extract_period <- function(START, END){
+  df <-
+    SR_tower %>%
+    filter(Datetime_hr_CST >= START & Datetime_hr_CST <= END) %>%
+    rename(date = Datetime_hr_CST) # let wc analysis recognize the date column
+  return(df)
+}
+
+
+### For SR and Rh ###
+# 2022
+
+SR_Rh_May22 <- extract_period("2022-05-22 12:00:00", "2022-06-09 16:00:00")
+# SR_Rh_Wnt22 <- extract_period("2022-11-23 13:00:00", "2022-11-30 16:00:00") # only a week
+
+# 2023
+# Winter 23 (M11): 2023-03-15 20:00:00 ~ 2023-04-05 19:00:00
+SR_Rh_Mar23 <- extract_period("2023-03-15 21:00:00", "2023-04-05 20:00:00") 
+# SR_Rh_Spr23 <- extract_period("2023-03-15 21:00:00", "2023-03-31 14:00:00") # Rh missing periodically
+# SR_Rh_Spr23_2 <- extract_period("2023-05-01 01:00:00", "2023-05-15 15:00:00")
+# SR_Rh_Spr23_3 <- extract_period("2023-05-23 18:00:00", "2023-06-06 14:00:00") # Rh missing periodically
+
+# too much gaps
+# 2023-05-08 23:00:00 ~ 2023-05-11 16:00:00
+# 2023-05-23 17:00:00 ~ 2023-05-25 15:00:00
+
+#SR_Rh_Spr23 <- extract_period("2023-05-01 01:00:00", "2023-06-06 14:00:00")
+
+# 2024
+SR_Rh_Jan24 <- extract_period("2024-01-25 09:00:00", "2024-02-04 12:00:00")
+
+SR_Rh_Feb24 <- 
+  extract_period("2024-02-20 14:00:00", "2024-03-20 23:59:00") %>% 
+  rowwise() %>%
+  mutate(SR = mean(c(SR1, SR2), na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(Ra = SR - Rh)
+
+
+SR_Rh_Mar24 <- 
+  extract_period("2024-03-21 00:00:00", "2024-04-27 13:00:00") %>% 
+  rowwise() %>%
+  mutate(SR = mean(c(SR1, SR2), na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(Ra = SR - Rh)
+
+### For SR ###
+# SR_grow23 <- 
+#   SR_tower %>%
+#   filter(Datetime_hr_CST > "2023-03-10" & Datetime_hr_CST < "2023-8-27 20:00:00") 
+```
+
+```{r Prep before the wavelet analysis}
+# normalize with 0 mean and unit variance - use scale()
+
+# for cross wavelet analysis with Morlet function (continuous) 
+scale_pad <- function(df, var1, var2){
+  df %>%
+    select(date, var1, var2) %>%
+    mutate(NA_flag = ifelse(!is.na(df[[var1]]) & !is.na(df[[var2]]), "0", "1")) %>%
+    mutate(across(where(is.numeric), scale)) %>%
+    mutate(across(where(is.numeric), ~replace(., is.na(.), 0)))
+}
+
+# function to calculate daily q10 and base respiration at 20 C
+daily_q10 <- function(df, SR_col, Rh_col, Ra_col){
+  
+  df1 <- df %>%
+    mutate(day = lubridate::date(date)) %>%
+    rename("SR" = !!sym(SR_col)) %>%
+    rename("Rh" = !!sym(Rh_col)) %>%
+    rename("Ra" = !!sym(Ra_col)) 
+
+  
+  # for SR
+  df_SR <- 
+    df1 %>%
+    nls_table(
+      SR ~ R20 * Q10^((TS_1_1_1 - 20) / (10)),
+      mod_start = c(R20 = 4, Q10 = 2),
+      .groups = "day") %>%
+    as.data.frame() %>%
+    rename("SR20" = "b0", "Q10_SR" = "b1")
+  
+  df_Rh <- 
+    df1 %>%
+    nls_table(
+      Rh ~ R20 * Q10^((TS_1_1_1 - 20) / (10)),
+      mod_start = c(R20 = 4, Q10 = 2),
+      .groups = "day") %>%
+    as.data.frame() %>%
+    rename("Rh20" = "b0", "Q10_Rh" = "b1")
+  
+  df_Ra <- 
+    df1 %>%
+    nls_table(
+      Ra ~ R20 * Q10^((TS_1_1_1 - 20) / (10)),
+      mod_start = c(R20 = 4, Q10 = 2),
+      .groups = "day") %>%
+    as.data.frame() %>%
+    rename("Ra20" = "b0", "Q10_Ra" = "b1")
+    
+  
+  df2 <- 
+    list(df_SR, df_Rh, df_Ra) %>% 
+    reduce(full_join, by = 'day') 
+  
+  output <- 
+    left_join(df1, df2, by = "day") %>%
+    mutate(
+      mSR = SR20 * Q10_SR ^ ((TS_1_1_1 - 20) / (10)),
+      mRh = Rh20 * Q10_Rh ^ ((TS_1_1_1 - 20) / (10)),
+      mRa = Ra20 * Q10_Ra ^ ((TS_1_1_1 - 20) / (10))
+           ) %>% 
+    mutate(
+      rSR = SR - mSR,
+      rRh = Rh - mRh,
+      rRa = Ra - mRa
+    )
+    
+  
+  return(output)
+}
+
+# function to check the amount (%) of the gaps
+pMiss <- function(x){
+  sum(is.na(x)) / length(x) * 100
+  }
+
+
+# Detect gap lengths in the time series
+detect_gaps <- function(data, col) {
+  
+  mt <- is.na(data[, col])
+  ind <- 1 # index for marking the gaps
+  mk <- vector()
+  
+  for (i in 1:length(mt)) {
+    if (mt[i] == FALSE) {
+      mk[i] <- 0 # non-gaps are marked as 0
+    } else {
+      if (mt[i] == TRUE) {
+        mk[i] <- ind # gaps are marked as the value of ind
+        if (i != length(mt)){ # to prevent the error when loop reach the end
+          if (mt[i + 1] == FALSE) {
+            ind <- ind + 1 # when reached the end of a gap, change add 1 to ind
+          }
+        }
+      }
+    }
+  }
+  
+  stat <- table(mk)[-1] # number of data points in each gap
+  # print using "cat" for break into lines
+  cat(paste0("","\n",
+             "##### Summary #####","\n",
+             "","\n",
+             "Total gaps:       ",max(mk),"\n",
+             "< 6 hrs:          ",sum(stat < 6),"\n",
+             ">= 6 hrs < 1 day: ",sum(stat >= 6 & stat < 24),"\n",
+             ">= 1 & < 2 days:  ",sum(stat >= 24 & stat < 24*2),"\n",
+             ">= 2 days:        ",sum(stat >= 24*2)
+  ))
+}
+
+
+# function to write a list of dfs to csvs
+save_to_csv <- function(list_of_dfs, dir, fname){
+  for (i in seq_along(list_of_dfs)) {
+  write.csv(list_of_dfs[[i]], paste0(dir, fname, names(list_of_dfs)[i], ".csv"), row.names = FALSE)
+  }
+}
+
+```
+
+
+```{r cross wavelet - continuous}
+
+coh <- function(df, var1, var2, upper){
+  df1 <- scale_pad(df, var1, var2)
+  analyze.coherency(df1, my.pair = c(var1, var2),
+                          loess.span = 0,     ## no detrending required
+                          dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                          dj = 1/100,         ## resolution along period axis
+                          lowerPeriod = 1/4,  ## 6 hour
+                          upperPeriod = upper,
+                          make.pval = T,      ## check for significance
+                          n.sim = 10)         ## 10 white-noise simulations used for assessing significance 
+}
+
+# function to generate a cross-wavelet power spectrum
+wc_img <- 
+  function(df, title){
+  
+  dev.new(width = 6, height = 5, noRStudioGD = TRUE)
+  
+  wc.image(
+    df,
+    legend.params = 
+      list(
+        lab = "cross-wavelet power levels", # axis label
+        lab.line = 1.5, # distance between bar label and axis label
+        mar = 5
+        ), 
+    lvl = 0.3,
+    timelab = "",
+    show.date = T, 
+    date.format = "%Y-%m-%d %H:%M:%S",
+    periodlab = "period (days)",
+    main = title
+    )
+
+}
+
+# function to analyze and plot them all not recommended for a longer period  of
+# term
+
+# does not work well when assign an object name..
+# want to make a timestamp x axis - too crowded w/ hourly timestamps
+wc_summary <- function(df, resp_var){
+  
+  wc_results <- list()
+  
+  # wc result
+  wc_results[["PAR"]] <- coh(df, resp_var, "PPFD_IN_1_1_1", 64)
+  wc_results[["Ts"]] <- coh(df, resp_var,"TS_1_1_1", 64)
+  wc_results[["SWC"]] <- coh(df, resp_var, "SWC_1_1_1", 64)
+
+  return(wc_results)
+  }
+
+# this will generate all 4 plots one by one
+wc_img_gen <- function(df, resp_var){
+ # par(mar=c(2,2,1.5,0.3)+0.1)
+  par(plt = c(0.1, 0.95, 0.1, 0.95))
+  wc_img(df[["PAR"]], paste0(resp_var, " vs PAR"))
+  wc_img(df[["Ts"]], paste0(resp_var, " vs Ts"))
+  wc_img(df[["SWC"]], paste0(resp_var, " vs SWC"))
+
+}
+
+# this will generate all 4 plots one by one
+wc_avg_gen <- function(df, resp_var){
+
+  wc.avg(df[["PAR"]], main = paste0(resp_var, " vs PAR"), siglvl = 0.05, sigcol = "black", 
+         sigpch = 20, periodlab = "", show.legend = F, averagelab = "", maximum.level = 25)
+  
+  wc.avg(df[["Ts"]], main = paste0(resp_var, " vs Ts"), siglvl = 0.05, sigcol = "black", 
+         sigpch = 20, periodlab = "", show.legend = F, averagelab = "", maximum.level = 25)
+  
+  wc.avg(df[["SWC"]], main = paste0(resp_var, " vs SWC"), siglvl = 0.05, sigcol = "black", 
+         sigpch = 20, periodlab = "", show.legend = F, averagelab = "", maximum.level = 25)
+  
+}
+
+# function to generate result df
+coh_result <- function(pad_df, coh_df){
+  
+  # extracting the p-value at Period 1
+  result <- 
+    cbind(pad_df, data.frame(pval_period1 = coh_df$Power.xy.pval[201,])) 
+  
+  # Average angles between Period 0.5 - 1.5
+  # ASSUMING THE Y_AXIS IS LOG-BASED
+  result$Angle_raw <- colMeans(data.frame(coh_df$Angle[101:211,])) 
+  result$Power_raw <- colMeans(data.frame(coh_df$Power.xy[101:211,])) 
+  
+  # Result df with NA_flag, and running averages
+  result <- 
+    result %>%
+    mutate(Angle = ifelse(NA_flag == "0" & pval_period1 < 0.1, Angle_raw, NA),
+           Angle_1d = zoo::rollmean(Angle, k = 24, fill = NA),      # 1 day moving avg - 24
+           Angle_7d = zoo::rollmean(Angle, k = 24*7, fill = NA),    # 7 days moving avg - 24*7
+           Angle_15d = zoo::rollmean(Angle, k = 24*15, fill = NA),  # 15 days moving avg - 24*15
+           Power = ifelse(NA_flag == "0" & pval_period1 < 0.1, Power_raw, NA),
+           Power_1d = zoo::rollmean(Power, k = 24, fill = NA),      # 1 day moving avg - 24
+           Power_7d = zoo::rollmean(Power, k = 24*7, fill = NA),    # 7 days moving avg - 24*7
+           Power_15d = zoo::rollmean(Power, k = 24*15, fill = NA))  # 15 days moving avg - 24*15
+  return(result)
+}
+
+# FOR VIZ
+wc_lag_img <- function(result_df, title){
+  
+  result_df$date <- as_datetime(result_df$date)
+  
+  # 1: the midtime to have a time (00:00)
+  # 2: if / included use mdy_hm, not use ymd_hms
+  # result_df$date <- ifelse(grepl("/", result_df$date), 
+  #                          as_datetime(ifelse(grepl(":",date), as.POSIXct(date, format = '%m/%d/%Y %H:%M'),
+  #                                          as.POSIXct(date, format = '%m/%d/%Y'))),
+  #                          as_datetime(date) 
+  #                          )
+  
+  pivot_longer(result_df, 
+               cols = c(Angle, Angle_1d, Angle_7d, Angle_15d),
+               names_to = "Variable", 
+               values_to = "Value"
+               ) %>%
+    ggplot() +
+    geom_point(aes(date, 24 * Value / (2 * pi), col = Variable)) +
+    scale_color_manual(breaks=c("Angle", "Angle_1d", "Angle_7d", "Angle_15d"),
+                       values = c("#A0B1BA", "#045275", "#089099", "#7CCBA2")) + 
+    theme_classic() + ylab("Hours") + 
+    ggtitle(title) +
+    geom_abline(slope = 0, intercept = 0) + 
+    theme(
+      legend.position="top",
+      axis.title.x = element_blank(),axis.text.x = element_text(size = 20),
+      axis.title.y = element_text(size = 20), axis.text.y = element_text(size = 20),
+      legend.title = element_blank(), legend.text = element_text(size = 20),
+      axis.ticks.x=element_blank()
+      ) +
+    scale_x_datetime(date_breaks = "2 week", date_labels = "%B %d") 
+}
+
+
+
+# summarize the result 
+wc_result_summary <- function(orig_df, resp_var, wc_sum_df){
+  
+  scale_pad_summary <- list()
+  
+  scale_pad_summary[["PAR"]] <- scale_pad(orig_df, resp_var, "PPFD_IN_1_1_1")
+  scale_pad_summary[["Ts"]] <- scale_pad(orig_df, resp_var, "TS_1_1_1")
+  scale_pad_summary[["SWC"]] <- scale_pad(orig_df, resp_var, "SWC_1_1_1")
+  
+  results <- list()
+  
+  results[["PAR"]] <- coh_result(scale_pad_summary[["PAR"]], wc_sum_df$PAR)
+  results[["Ts"]] <- coh_result(scale_pad_summary[["Ts"]], wc_sum_df$Ts)
+  results[["SWC"]] <- coh_result(scale_pad_summary[["SWC"]], wc_sum_df$SWC)
+  
+  return(results)
+}
+
+                                              
+
+```
+
+```{r temporal pwr df & ggplot}
+wt_avg <- function(df, ymax){
+    
+    if (class(df) != "analyze.wavelet") {
+        stop("Your object class is not 'analyze.wavelet'")
+    }
+    
+    # Create the dataframe
+    output_df <- 
+        data.frame(
+            Period = df[["Period"]], 
+            Power.avg = df[["Power.avg"]],
+            Power.avg.pval = df[["Power.avg.pval"]]
+        ) %>%
+        mutate(Power.avg.sig = ifelse(Power.avg.pval < 0.05, Power.avg, NA))
+    
+    # Create the plot
+    p1 <- 
+        ggplot(output_df) + 
+        geom_line(aes(log2(Period), Power.avg)) +
+        geom_point(aes(log2(Period), Power.avg.sig), size = 3) + 
+        theme_classic() + 
+        ylab("Avg. Wavelet Spectram") + 
+        xlab("Period (days; log scale)") +
+        scale_x_continuous(
+            breaks = c(0, 3, 6),
+            label = c(1, 8, 64)
+        ) +
+        scale_y_continuous(
+            breaks = c(0, 10, 20),
+            limits = c(0, ymax)
+        ) +
+        theme(
+            axis.title.x = element_text(size = 25), 
+            axis.text.x = element_text(size = 25),
+            axis.title.y = element_text(size = 25), 
+            axis.text.y = element_text(size = 25),
+            legend.title = element_text(size = 25), 
+            legend.text = element_text(size = 25),
+            panel.border = element_rect(colour = "black", fill = NA, linewidth = 1)
+        )
+    
+    # Return both the dataframe and plot as a list
+    return(list(df = output_df, plot = p1))
+}
+
+
+wc_avg <- function(df, ymax){
+  
+    if (class(df) == "analyze.wavelet") {
+      stop("Your object class is 'analyze.wavelet' - use wt_img_gg")
+    }
+  
+   # Create the dataframe
+    output_df <- 
+        data.frame(
+            Period = df[["Period"]], 
+            Power.avg = df[["Power.xy.avg"]],
+            Power.avg.pval = df[["Power.xy.avg.pval"]]
+        ) %>%
+        mutate(Power.avg.sig = ifelse(Power.avg.pval < 0.05, Power.avg, NA))
+      
+      
+      p1 <- 
+        ggplot() + 
+        geom_line(aes(log2(Period), Power.avg)) +
+        geom_point(aes(log2(Period), Power.avg.sig), size = 3) + 
+        theme_classic() + 
+        ylab("Avg. Wavelet Spectram") + xlab("Period (days; log scale)") +
+        scale_x_continuous(
+          breaks = c(0, 3, 6),
+          label = c(1, 8, 64)
+          ) +
+        scale_y_continuous(
+          breaks = c(0, 10, 20),
+          limits = c(0, ymax)
+          ) + 
+        theme(
+          axis.title.x = element_text(size = 25), 
+          axis.text.x = element_text(size = 25),
+          axis.title.y = element_text(size = 25), 
+          axis.text.y = element_text(size = 25),
+          legend.title = element_text(size = 25), 
+          legend.text = element_text(size = 25),
+          panel.border = element_rect(colour = "black", fill = NA, linewidth = 1)
+          ) 
+
+    # Return both the dataframe and plot as a list
+    return(list(df = output_df, plot = p1))
+  
+}
+
+
+```
+
+```{r location to save}
+dir_pwr = "G:/My Drive/Research/Projects/DC_auto/Data/Nov2024_rerun/Re_result_pad_64d_res/df_temporal_pwr/"
+dir_diurnal = "G:/My Drive/Research/Projects/DC_auto/Data/Nov2024_rerun/Re_result_pad_64d_res/df_diurnal/"
+
+```
+
+```{r CWT 2022}
+apply(SR_Rh_May22, 2, pMiss)
+
+# gap length 
+# only PAR
+detect_gaps(SR_Rh_May22, "PPFD_IN_1_1_1")
+
+# take residuals
+SR_Rh_May22_res <- daily_q10(SR_Rh_May22, "SR1", "Rh", "Ra1")
+write.csv(SR_Rh_May22_res, "G:/My Drive/Research/Projects/DC_auto/Data/Nov2024_rerun/Re_result_pad_64d_res/df/C1.csv", row.names = F)
+
+# residual Rh
+wc_rRh_May22 <- wc_summary(SR_Rh_May22_res, "rRh")
+
+# heatmap
+wc_img_gen(wc_rRh_May22, "rRh")
+
+# temporal power data & graph
+rRh_PAR_May22_pwr <- wc_avg(wc_rRh_May22$PAR, 25)
+rRh_Ts_May22_pwr <- wc_avg(wc_rRh_May22$Ts, 25)
+rRh_SWC_May22_pwr <- wc_avg(wc_rRh_May22$SWC, 25)
+
+# csv output
+write.csv(rRh_PAR_May22_pwr$df, paste0(dir_pwr, "C1_rRh_PAR_May22.csv"), row.names = F)
+write.csv(rRh_Ts_May22_pwr$df, paste0(dir_pwr, "C1_rRh_Ts_May22.csv"), row.names = F)
+write.csv(rRh_SWC_May22_pwr$df, paste0(dir_pwr, "C1_rRh_SWC_May22.csv"), row.names = F)
+
+# extracting diurnal angle & power patterns from heatmap
+wc_rRh_May22_diurnal_summary <- wc_result_summary(SR_Rh_May22_res, "rRh", wc_rRh_May22)
+save_to_csv(wc_rRh_May22_diurnal_summary, dir_diurnal, "C1_wc_rRh_May22_")
+
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRh_May22_diurnal_summary$PAR, "PAR"),
+  wc_lag_img(wc_rRh_May22_diurnal_summary$Ts, "Ts"),
+  wc_lag_img(wc_rRh_May22_diurnal_summary$SWC, "SWC"),
+  ncol = 3, common.legend = T
+)
+
+
+# residual Ra
+wc_rRa_May22 <- wc_summary(SR_Rh_May22_res, "rRa")
+wc_img_gen(wc_rRa_May22, "rRa")
+
+# temporal power data & graph
+rRa_PAR_May22_pwr <- wc_avg(wc_rRa_May22$PAR, 25)
+rRa_Ts_May22_pwr <- wc_avg(wc_rRa_May22$Ts, 25)
+rRa_SWC_May22_pwr <- wc_avg(wc_rRa_May22$SWC, 25)
+
+# csv output
+write.csv(rRa_PAR_May22_pwr$df, paste0(dir_pwr, "C1_rRa_PAR_May22.csv"), row.names = F)
+write.csv(rRa_Ts_May22_pwr$df, paste0(dir_pwr, "C1_rRa_Ts_May22.csv"), row.names = F)
+write.csv(rRa_SWC_May22_pwr$df, paste0(dir_pwr, "C1_rRa_SWC_May22.csv"), row.names = F)
+
+# extracting diurnal angle & power patterns from heatmap
+wc_rRa_May22_diurnal_summary <- wc_result_summary(SR_Rh_May22_res, "rRa", wc_rRa_May22)
+save_to_csv(wc_rRa_May22_diurnal_summary, dir_diurnal, "C1_wc_rRa_May22_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRa_May22_diurnal_summary$PAR, "PAR"),
+  wc_lag_img(wc_rRa_May22_diurnal_summary$Ts, "Ts"),
+  wc_lag_img(wc_rRa_May22_diurnal_summary$SWC, "SWC"),
+  ncol = 3, common.legend = T
+)
+
+```
+
+```{r WT 2022}
+wt_rRh_May22 <- 
+  analyze.wavelet(wc_rRh_May22$PAR$series,"rRh", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+rRh_May22_pwr <- wt_avg(wt_rRh_May22, 25)
+write.csv(rRh_May22_pwr$df, paste0(dir_pwr, "C1_rRh_May22.csv"), row.names = F)
+
+# rRa
+wt_rRa_May22 <- 
+  analyze.wavelet(wc_rRa_May22$PAR$series,"rRa", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+rRa_May22_pwr <- wt_avg(wt_rRa_May22, 25)
+write.csv(rRa_May22_pwr$df, paste0(dir_pwr, "C1_rRa_May22.csv"), row.names = F)
+```
+
+
+```{r CWT Mar23}
+apply(SR_Rh_Mar23, 2, pMiss)
+
+# gap length 
+detect_gaps(SR_Rh_Mar23, "TS_1_1_1")
+detect_gaps(SR_Rh_Mar23, "SWC_1_1_1")
+detect_gaps(SR_Rh_Mar23, "SR1")
+detect_gaps(SR_Rh_Mar23, "Rh")
+detect_gaps(SR_Rh_Mar23, "Ra1")
+
+SR_Rh_Mar23_res <-
+  daily_q10(SR_Rh_Mar23, "SR1", "Rh", "Ra1")
+write.csv(SR_Rh_Mar23_res, "G:/My Drive/Research/Projects/DC_auto/Data/Nov2024_rerun/Re_result_pad_64d_res/df/C2.csv", row.names = F)
+
+# residual Rh
+wc_rRh_Mar23 <- wc_summary(SR_Rh_Mar23_res, "rRh")
+wc_img_gen(wc_rRh_Mar23, "rRh")
+
+# temporal power data & graph
+rRh_PAR_Mar23_pwr <- wc_avg(wc_rRh_Mar23$PAR, 25)
+rRh_Ts_Mar23_pwr <- wc_avg(wc_rRh_Mar23$Ts, 25)
+rRh_SWC_Mar23_pwr <- wc_avg(wc_rRh_Mar23$SWC, 25)
+
+# csv output
+write.csv(rRh_PAR_Mar23_pwr$df, paste0(dir_pwr, "C2_rRh_PAR_Mar23.csv"), row.names = F)
+write.csv(rRh_Ts_Mar23_pwr$df, paste0(dir_pwr, "C2_rRh_Ts_Mar23.csv"), row.names = F)
+write.csv(rRh_SWC_Mar23_pwr$df, paste0(dir_pwr, "C2_rRh_SWC_Mar23.csv"), row.names = F)
+
+# result
+wc_rRh_Mar23_diurnal_summary <- wc_result_summary(SR_Rh_Mar23_res, "rRh", wc_rRh_Mar23)
+save_to_csv(wc_rRh_Mar23_diurnal_summary, dir_diurnal, "C2_wc_rRh_Mar23_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRh_Mar23_diurnal_summary$PAR, "PAR"),
+  wc_lag_img(wc_rRh_Mar23_diurnal_summary$Ts, "Ts"),
+  wc_lag_img(wc_rRh_Mar23_diurnal_summary$SWC, "SWC"),
+  ncol = 3, common.legend = T
+)
+
+
+# residual Ra
+wc_rRa_Mar23 <- wc_summary(SR_Rh_Mar23_res, "rRa")
+wc_img_gen(wc_rRa_Mar23, "rRa")
+
+# temporal power data & graph
+rRa_PAR_Mar23_pwr <- wc_avg(wc_rRa_Mar23$PAR, 25)
+rRa_Ts_Mar23_pwr <- wc_avg(wc_rRa_Mar23$Ts, 25)
+rRa_SWC_Mar23_pwr <- wc_avg(wc_rRa_Mar23$SWC, 25)
+
+# csv output
+write.csv(rRa_PAR_Mar23_pwr$df, paste0(dir_pwr, "C2_rRa_PAR_Mar23.csv"), row.names = F)
+write.csv(rRa_Ts_Mar23_pwr$df, paste0(dir_pwr, "C2_rRa_Ts_Mar23.csv"), row.names = F)
+write.csv(rRa_SWC_Mar23_pwr$df, paste0(dir_pwr, "C2_rRa_SWC_Mar23.csv"), row.names = F)
+
+# summary
+wc_rRa_Mar23_diurnal_summary <- wc_result_summary(SR_Rh_Mar23_res, "Ra", wc_rRa_Mar23)
+save_to_csv(wc_rRa_Mar23_diurnal_summary, dir_diurnal, "C2_wc_rRa_Mar23_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRa_Mar23_diurnal_summary$PAR, "PAR"),
+  wc_lag_img(wc_rRa_Mar23_diurnal_summary$Ts, "Ts"),
+  wc_lag_img(wc_rRa_Mar23_diurnal_summary$SWC, "SWC"),
+  ncol = 3, common.legend = T
+  )  
+
+```
+
+```{r WT Mar23}
+wt_rRh_Mar23 <- 
+  analyze.wavelet(wc_rRh_Mar23$PAR$series,"rRh", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+
+rRh_Mar23_pwr <- wt_avg(wt_rRh_Mar23, 25)
+write.csv(rRh_Mar23_pwr$df, paste0(dir_pwr, "C2_rRh_Mar23.csv"), row.names = F)
+
+# rRa
+wt_rRa_Mar23 <- 
+  analyze.wavelet(wc_rRa_Mar23$PAR$series,"rRa", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+rRa_Mar23_pwr <- wt_avg(wt_rRa_Mar23, 25)
+write.csv(rRa_Mar23_pwr$df, paste0(dir_pwr, "C2_rRa_Mar23.csv"), row.names = F)
+```
+
+
+
+```{r CWT 24}
+
+apply(SR_Rh_Jan24, 2, pMiss)
+
+# gap length 
+# only SR1, Rh, Ra1
+detect_gaps(SR_Rh_Jan24, "SR1")
+detect_gaps(SR_Rh_Jan24, "Rh")
+detect_gaps(SR_Rh_Jan24, "Ra1")
+
+SR_Rh_Jan24_res <- daily_q10(SR_Rh_Jan24, "SR1", "Rh", "Ra1")
+write.csv(SR_Rh_Jan24_res, "G:/My Drive/Research/Projects/DC_auto/Data/Nov2024_rerun/Re_result_pad_64d_res/df/C3.csv", row.names = F)
+
+# Rh residual
+wc_rRh_Jan24 <- wc_summary(SR_Rh_Jan24_res, "rRh")
+
+wc_img_gen(wc_rRh_Jan24, "rRh")
+
+# power avg
+rRh_PAR_Jan24_pwr <- wc_avg(wc_rRh_Jan24$PAR, 25)
+rRh_Ts_Jan24_pwr <- wc_avg(wc_rRh_Jan24$Ts, 25)
+rRh_SWC_Jan24_pwr <- wc_avg(wc_rRh_Jan24$SWC, 25)
+
+# csv output
+write.csv(rRh_PAR_Jan24_pwr$df, paste0(dir_pwr, "C3_rRh_PAR_Jan24.csv"), row.names = F)
+write.csv(rRh_Ts_Jan24_pwr$df, paste0(dir_pwr, "C3_rRh_Ts_Jan24.csv"), row.names = F)
+write.csv(rRh_SWC_Jan24_pwr$df, paste0(dir_pwr, "C3_rRh_SWC_Jan24.csv"), row.names = F)
+
+wc_rRh_Jan24_diurnal_summary <- wc_result_summary(SR_Rh_Jan24_res, "rRh", wc_rRh_Jan24)
+save_to_csv(wc_rRh_Jan24_diurnal_summary, dir_diurnal, "C3_wc_rRh_Jan24_")
+
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRh_Jan24_diurnal_summary$PAR, "PAR"),
+  wc_lag_img(wc_rRh_Jan24_diurnal_summary$Ts, "Ts"),
+  wc_lag_img(wc_rRh_Jan24_diurnal_summary$SWC, "SWC"),
+  ncol = 3, common.legend = T
+)
+
+
+
+
+# Ra residual
+wc_rRa_Jan24 <- wc_summary(SR_Rh_Jan24_res, "rRa")
+wc_img_gen(wc_rRa_Jan24, "rRa")
+
+# power avg
+rRa_PAR_Jan24_pwr <- wc_avg(wc_rRa_Jan24$PAR, 25)
+rRa_Ts_Jan24_pwr <- wc_avg(wc_rRa_Jan24$Ts, 25)
+rRa_SWC_Jan24_pwr <- wc_avg(wc_rRa_Jan24$SWC, 25)
+
+# csv output
+write.csv(rRa_PAR_Jan24_pwr$df, paste0(dir_pwr, "C3_rRa_PAR_Jan24.csv"), row.names = F)
+write.csv(rRa_Ts_Jan24_pwr$df, paste0(dir_pwr, "C3_rRa_Ts_Jan24.csv"), row.names = F)
+write.csv(rRa_SWC_Jan24_pwr$df, paste0(dir_pwr, "C3_rRa_SWC_Jan24.csv"), row.names = F)
+
+# result
+wc_rRa_Jan24_diurnal_summary <- wc_result_summary(SR_Rh_Jan24_res, "rRa", wc_rRa_Jan24)
+save_to_csv(wc_rRa_Jan24_diurnal_summary, dir_diurnal, "C3_wc_rRa_Jan24_")
+
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRa_Jan24_diurnal_summary$PAR, "PAR"),
+  wc_lag_img(wc_rRa_Jan24_diurnal_summary$Ts, "Ts"),
+  wc_lag_img(wc_rRa_Jan24_diurnal_summary$SWC, "SWC"),
+  ncol = 3, common.legend = T
+)
+
+###################
+### SR_Rh_Feb24 ###
+###################
+
+
+apply(SR_Rh_Feb24, 2, pMiss)
+
+# gap length 
+# only SR1, Rh, Ra1
+detect_gaps(SR_Rh_Feb24, "PPFD_IN_1_1_1")
+detect_gaps(SR_Rh_Feb24, "SR")
+detect_gaps(SR_Rh_Feb24, "Rh")
+detect_gaps(SR_Rh_Feb24, "Ra")
+
+SR_Rh_Feb24_res <- daily_q10(SR_Rh_Feb24, "SR", "Rh", "Ra")
+write.csv(SR_Rh_Feb24_res, "G:/My Drive/Research/Projects/DC_auto/Data/Nov2024_rerun/Re_result_pad_64d_res/df/C4.csv", row.names = F)
+
+# Ra residual
+wc_rRh_Feb24 <- wc_summary(SR_Rh_Feb24_res, "rRh")
+wc_img_gen(wc_rRh_Feb24, "rRh")
+
+# power avg
+rRh_PAR_Feb24_pwr <- wc_avg(wc_rRh_Feb24$PAR, 25)
+rRh_Ts_Feb24_pwr <- wc_avg(wc_rRh_Feb24$Ts, 25)
+rRh_SWC_Feb24_pwr <- wc_avg(wc_rRh_Feb24$SWC, 25)
+
+# csv output
+write.csv(rRh_PAR_Feb24_pwr$df, paste0(dir_pwr, "C4_rRh_PAR_Feb24.csv"), row.names = F)
+write.csv(rRh_Ts_Feb24_pwr$df, paste0(dir_pwr, "C4_rRh_Ts_Feb24.csv"), row.names = F)
+write.csv(rRh_SWC_Feb24_pwr$df, paste0(dir_pwr, "C4_rRh_SWC_Feb24.csv"), row.names = F)
+
+wc_rRh_Feb24_diurnal_summary <- wc_result_summary(SR_Rh_Feb24_res, "rRh", wc_rRh_Feb24)
+save_to_csv(wc_rRh_Feb24_diurnal_summary, dir_diurnal, "C4_wc_rRh_Feb24_")
+
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRh_Feb24_diurnal_summary$PAR, "PAR"),
+  wc_lag_img(wc_rRh_Feb24_diurnal_summary$Ts, "Ts"),
+  wc_lag_img(wc_rRh_Feb24_diurnal_summary$SWC, "SWC"),
+  ncol = 3, common.legend = T
+)
+
+
+
+
+# Ra residual
+wc_rRa_Feb24 <- wc_summary(SR_Rh_Feb24_res, "rRa")
+wc_img_gen(wc_rRa_Feb24, "rRa")
+
+# power avg
+rRa_PAR_Feb24_pwr <- wc_avg(wc_rRa_Feb24$PAR, 25)
+rRa_Ts_Feb24_pwr <- wc_avg(wc_rRa_Feb24$Ts, 25)
+rRa_SWC_Feb24_pwr <- wc_avg(wc_rRa_Feb24$SWC, 25)
+
+# csv output
+write.csv(rRa_PAR_Feb24_pwr$df, paste0(dir_pwr, "C4_rRa_PAR_Feb24.csv"), row.names = F)
+write.csv(rRa_Ts_Feb24_pwr$df, paste0(dir_pwr, "C4_rRa_Ts_Feb24.csv"), row.names = F)
+write.csv(rRa_SWC_Feb24_pwr$df, paste0(dir_pwr, "C4_rRa_SWC_Feb24.csv"), row.names = F)
+
+wc_rRa_Feb24_diurnal_summary <- wc_result_summary(SR_Rh_Feb24_res, "rRh", wc_rRa_Feb24)
+save_to_csv(wc_rRa_Feb24_diurnal_summary, dir_diurnal, "C4_wc_rRa_Feb24_")
+
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRa_Feb24_diurnal_summary$PAR, "PAR"),
+  wc_lag_img(wc_rRa_Feb24_diurnal_summary$Ts, "Ts"),
+  wc_lag_img(wc_rRa_Feb24_diurnal_summary$SWC, "SWC"),
+  ncol = 3, common.legend = T
+)
+
+###################
+### SR_Rh_Mar24 ###
+###################
+
+apply(SR_Rh_Mar24, 2, pMiss)
+
+detect_gaps(SR_Rh_Mar24, "PPFD_IN_1_1_1")
+detect_gaps(SR_Rh_Mar24, "TS_1_1_1")
+detect_gaps(SR_Rh_Mar24, "SWC_1_1_1")
+detect_gaps(SR_Rh_Mar24, "SR")
+detect_gaps(SR_Rh_Mar24, "Rh")
+detect_gaps(SR_Rh_Mar24, "Ra")
+
+SR_Rh_Mar24_res <- daily_q10(SR_Rh_Mar24, "SR", "Rh", "Ra")
+write.csv(SR_Rh_Mar24_res, "G:/My Drive/Research/Projects/DC_auto/Data/Nov2024_rerun/Re_result_pad_64d_res/df/C5.csv", row.names = F)
+
+# residual Rh
+wc_rRh_Mar24 <- wc_summary(SR_Rh_Mar24_res, "rRh")
+wc_img_gen(wc_rRh_Mar24, "rRh")
+
+# power avg
+rRh_PAR_Mar24_pwr <- wc_avg(wc_rRh_Mar24$PAR, 25)
+rRh_Ts_Mar24_pwr <- wc_avg(wc_rRh_Mar24$Ts, 25)
+rRh_SWC_Mar24_pwr <- wc_avg(wc_rRh_Mar24$SWC, 25)
+
+# csv output
+write.csv(rRh_PAR_Mar24_pwr$df, paste0(dir_pwr, "C5_rRh_PAR_Mar24.csv"), row.names = F)
+write.csv(rRh_Ts_Mar24_pwr$df, paste0(dir_pwr, "C5_rRh_Ts_Mar24.csv"), row.names = F)
+write.csv(rRh_SWC_Mar24_pwr$df, paste0(dir_pwr, "C5_rRh_SWC_Mar24.csv"), row.names = F)
+
+wc_rRh_Mar24_diurnal_summary <- wc_result_summary(SR_Rh_Mar24_res, "rRh", wc_rRh_Mar24)
+save_to_csv(wc_rRh_Mar24_diurnal_summary, dir_diurnal, "C5_wc_rRh_Mar24_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRh_Mar24_diurnal_summary$PAR, "PAR"),
+  wc_lag_img(wc_rRh_Mar24_diurnal_summary$Ts, "Ts"),
+  wc_lag_img(wc_rRh_Mar24_diurnal_summary$SWC, "SWC"),
+  ncol = 3, common.legend = T)
+
+
+
+# Residual Ra
+wc_rRa_Mar24 <- wc_summary(SR_Rh_Mar24_res, "rRa")
+wc_img_gen(wc_rRa_Mar24, "rRa")
+
+
+# power avg
+rRa_PAR_Mar24_pwr <- wc_avg(wc_rRa_Mar24$PAR, 25)
+rRa_Ts_Mar24_pwr <- wc_avg(wc_rRa_Mar24$Ts, 25)
+rRa_SWC_Mar24_pwr <- wc_avg(wc_rRa_Mar24$SWC, 25)
+
+# csv output
+write.csv(rRa_PAR_Mar24_pwr$df, paste0(dir_pwr, "C5_rRa_PAR_Mar24.csv"), row.names = F)
+write.csv(rRa_Ts_Mar24_pwr$df, paste0(dir_pwr, "C5_rRa_Ts_Mar24.csv"), row.names = F)
+write.csv(rRa_SWC_Mar24_pwr$df, paste0(dir_pwr, "C5_rRa_SWC_Mar24.csv"), row.names = F)
+
+wc_rRa_Mar24_diurnal_summary <- wc_result_summary(SR_Rh_Mar24_res, "rRh", wc_rRa_Mar24)
+save_to_csv(wc_rRa_Mar24_diurnal_summary, dir_diurnal, "C5_wc_rRa_Mar24_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRa_Mar24_diurnal_summary$PAR, "PAR"),
+  wc_lag_img(wc_rRa_Mar24_diurnal_summary$Ts, "Ts"),
+  wc_lag_img(wc_rRa_Mar24_diurnal_summary$SWC, "SWC"),
+  ncol = 3, common.legend = T)
+
+```
+
+```{r WT 2024}
+
+
+wt_rRh_Jan24 <- 
+  analyze.wavelet(wc_rRh_Jan24$PAR$series,"rRh", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+rRh_Jan24_pwr <- wt_avg(wt_rRh_Jan24, 25)
+write.csv(rRh_Jan24_pwr$df, paste0(dir_pwr, "C3_rRh_Jan24.csv"), row.names = F)
+
+
+# rRa
+wt_rRa_Jan24 <- 
+  analyze.wavelet(wc_rRa_Jan24$PAR$series,"rRa", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+
+rRa_Jan24_pwr <- wt_avg(wt_rRa_Jan24, 25)
+write.csv(rRa_Jan24_pwr$df, paste0(dir_pwr, "C3_rRa_Jan24.csv"), row.names = F)
+
+
+
+wt_rRh_Feb24 <- 
+  analyze.wavelet(wc_rRh_Feb24$PAR$series,"rRh", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+rRh_Feb24_pwr <- wt_avg(wt_rRh_Feb24, 25)
+write.csv(rRh_Feb24_pwr$df, paste0(dir_pwr, "C4_rRh_Feb24.csv"), row.names = F)
+
+
+# rRa
+wt_rRa_Feb24 <- 
+  analyze.wavelet(wc_rRa_Feb24$PAR$series,"rRa", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+
+rRa_Feb24_pwr <- wt_avg(wt_rRa_Feb24, 25)
+write.csv(rRa_Feb24_pwr$df, paste0(dir_pwr, "C4_rRa_Feb24.csv"), row.names = F)
+
+
+wt_rRh_Mar24 <- 
+  analyze.wavelet(wc_rRh_Mar24$PAR$series,"rRh", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+rRh_Mar24_pwr <- wt_avg(wt_rRh_Mar24, 25)
+write.csv(rRh_Mar24_pwr$df, paste0(dir_pwr, "C5_rRh_Mar24.csv"), row.names = F)
+
+# rRa
+wt_rRa_Mar24 <- 
+  analyze.wavelet(wc_rRa_Mar24$PAR$series,"rRa", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+rRa_Mar24_pwr <- wt_avg(wt_rRa_Mar24, 25)
+write.csv(rRa_Mar24_pwr$df, paste0(dir_pwr, "C5_rRa_Mar24.csv"), row.names = F)
+
+```
+
+
+
+```{r making dfs for diurnal peaks}
+
+filenames_res_pwr <- 
+  list.files("G:/My Drive/Research/Projects/DC_auto/Data/res_test_Mar2025/Hourly_model_diel_Q10/df_temporal_pwr/", "*.csv", full.names = T)
+
+temp_pwr_csv <- function(filename){
+  
+  df <- strsplit(filename, "/")[[1]][length(strsplit(filename, "/")[[1]])]
+  campaign <- strsplit(df, "_")[[1]][1]
+  resp <- strsplit(df, "_")[[1]][2]
+  driver <- ifelse(
+      is.na(strsplit(df, "_")[[1]][4]),
+      NA,
+      sub("\\.csv$", "", strsplit(df, "_")[[1]][3])
+    )
+  
+    result <- 
+    read.csv(filename) %>%
+    summarise(
+      pwr_P1 = Power.avg[Period == "1"],
+      pwr_max = max(Power.avg, na.rm = TRUE),
+      pwr_max_period = Period[which.max(Power.avg)]) %>% 
+    mutate(
+      df = df,
+      campaign = campaign,
+      resp = resp,
+      driver = driver
+    ) 
+}
+
+res_pwr <- purrr::map_dfr(filenames_res_pwr, temp_pwr_csv)
+
+# csv
+write.csv(res_pwr, "G:/My Drive/Research/Projects/DC_auto/Data/res_test_Mar2025/Hourly_model_diel_Q10/temp_pwr_res.csv", row.names = F)
+
+
+```
