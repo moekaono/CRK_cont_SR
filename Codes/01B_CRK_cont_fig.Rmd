@@ -1,0 +1,206 @@
+---
+title: "CRK_cont_fig"
+author: "MOEKA"
+date: "2025-05-15"
+output: html_document
+---
+
+```{r read df}
+setwd("G:/My Drive/Research/Projects/DC_auto/Data/GPP_SR_combined")
+
+GPP_SR_combined_2022_2024 <- 
+  read.csv("GPP_SR_combined_2022_2024.csv") %>% 
+  mutate(Datetime_hr_CST = as.POSIXct(Datetime_hr_CST, format = "%Y/%m/%d %H:%M", tz = "Etc/GMT+6"))
+
+```
+
+Summary result @ study_period_analysis
+
+```{r SR dfs}
+GPP_SR_MJ22 <- 
+  GPP_SR_combined_2022_2024 %>% 
+  filter(Datetime_hr_CST > "2022-05-22 11:00:00" & Datetime_hr_CST <= "2022-06-09 16:00:00")
+write.csv(GPP_SR_MJ22, "GPP_SR_MJ22.csv", row.names = F)
+
+GPP_SR_MA23 <- 
+  GPP_SR_combined_2022_2024 %>% 
+  filter(Datetime_hr_CST > "2023-03-15 20:00:00" & Datetime_hr_CST <= "2023-04-05 20:00:00")
+write.csv(GPP_SR_MA23, "GPP_SR_MA23.csv", row.names = F)
+
+GPP_SR_Mar24 <- 
+  GPP_SR_combined_2022_2024 %>% 
+  filter(Datetime_hr_CST > "2024-03-01 0:00:00" & Datetime_hr_CST <= "2024-04-01 0:00:00") %>% 
+  rowwise() %>%
+  mutate(
+    SR = mean(c(SR1, SR2), na.rm = TRUE),
+    Ra = mean(c(Ra1, Ra2), na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+write.csv(GPP_SR_Mar24, "GPP_SR_Mar24.csv", row.names = F)
+
+GPP_SR_Apr24 <- 
+  GPP_SR_combined_2022_2024 %>% 
+  filter(Datetime_hr_CST > "2024-04-01 0:00:00" & Datetime_hr_CST <= "2024-04-27 13:00:00") %>% 
+  rowwise() %>%
+  mutate(
+    SR = mean(c(SR1, SR2), na.rm = TRUE),
+    Ra = mean(c(Ra1, Ra2), na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+write.csv(GPP_SR_Apr24, "GPP_SR_Apr24.csv", row.names = F)
+
+
+GPP_SR_Sep24 <- 
+  GPP_SR_combined_2022_2024 %>% 
+  filter(Datetime_hr_CST > "2024-09-03 12:00:00" & Datetime_hr_CST <= "2024-10-01 0:00:00") %>% 
+  rowwise() %>%
+  mutate(
+    SR = mean(c(SR2, SR3), na.rm = TRUE),
+    Ra = mean(c(Ra2, Ra3), na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+write.csv(GPP_SR_Sep24, "GPP_SR_Sep24.csv", row.names = F)
+
+
+GPP_SR_Oct24 <- 
+  GPP_SR_combined_2022_2024 %>% 
+  filter(Datetime_hr_CST > "2024-10-01 0:00:00" & Datetime_hr_CST <= "2024-10-31 10:00:00") %>% 
+  rowwise() %>%
+  mutate(
+    SR = mean(c(SR2, SR3), na.rm = TRUE),
+    Ra = mean(c(Ra2, Ra3), na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+write.csv(GPP_SR_Oct24, "GPP_SR_Oct24.csv", row.names = F)
+
+```
+
+```{r SR graph}
+
+SR_plot <- function(df, Ra_var){
+  df %>% 
+    rename(Ra = Ra_var) %>% 
+    pivot_longer(cols = c(Ra, Rh), names_to = "Var", values_to = "Value") %>% 
+    mutate(DOY_hr = DoY + Hour_agg/24) %>% 
+    ggplot() +
+    geom_point(aes(DOY_hr, Value, col = factor(Var, levels = c("Ra", "Rh"))),
+               alpha = .5) + 
+    #scale_color_grey() + 
+    theme_classic() +
+    labs(color = "") + 
+    xlab("") + ylab("") + #xlim(0, 366) +
+    scale_y_continuous(breaks = seq(0, 6, 3), limits = c(-1.5, 6.5)) +
+    scale_color_manual(values = c("Ra" = "#20A39E", "Rh" = "darkorange")) +  
+    theme(axis.title.x = element_blank(), 
+          axis.text.x = element_text(size = 20),
+          axis.title.y = element_text(size = 20), 
+          axis.text.y = element_text(size = 20),
+          legend.title = element_text(size = 25), 
+          legend.text = element_text(size = 25),
+          legend.position = "top",
+          panel.border = element_rect(colour = "black", fill = NA, linewidth = 1)) 
+    
+}
+
+p_SR_MJ22 <- SR_plot(GPP_SR_MJ22, "Ra1") + scale_x_continuous(breaks = seq(140, 170, 20), limits = c(140, 165)) 
+p_SR_MA23 <- 
+  SR_plot(GPP_SR_MA23, "Ra1") + 
+  scale_x_continuous(breaks = seq(70, 100, 20), limits = c(70, 100)) + 
+  theme(
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank()
+    )
+p_SR_MA24 <- 
+  SR_plot(GPP_SR_MA24, "Ra") + 
+  scale_x_continuous(breaks = seq(60, 120, 20), limits = c(60, 120)) +
+  theme(
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank()
+    )
+
+p_SR_SO24 <- 
+  SR_plot(GPP_SR_SO24, "Ra") + 
+  scale_x_continuous(breaks = seq(240, 310, 20), limits = c(240, 310)) +
+  theme(
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank()
+    )
+
+(p_SR_MJ22 + p_SR_MA23 + p_SR_MA24 + p_SR_SO24) + 
+  plot_layout(ncol = 4, guides = "collect", widths = c(1, 1, 2, 2)) & 
+    theme(legend.position = "top") & 
+    ylab("Soil CO₂ efflux (µmol m⁻² s⁻¹)")
+
+```
+
+
+```{r ggplot template}
+theme_template <- 
+  theme(
+    axis.title.x = element_blank(), 
+    axis.text.x = element_blank(),
+    axis.title.y = element_text(size = 20), 
+    axis.text.y = element_text(size = 20),
+    legend.title = element_text(size = 20), 
+    legend.text = element_text(size = 20),
+    panel.border = element_rect(colour = "black", fill = NA, linewidth = 1)
+    ) 
+
+
+# plot_a_list <- function(master_list_with_plots, no_of_rows, no_of_cols) {
+#   patchwork::wrap_plots(
+#     master_list_with_plots, 
+#     nrow = no_of_rows, ncol = no_of_cols
+#     ) +
+#   plot_layout(axis_titles = "collect", axes = "collect") 
+# }
+
+
+shaded_periods <- data.frame(
+  xmin = as.POSIXct(c(
+    "2022-05-22 11:00",
+    "2023-03-15 20:00",
+    "2024-03-03 14:00",
+    "2024-09-03 12:00"
+  )),
+  xmax = as.POSIXct(c(
+    "2022-06-09 15:00",
+    "2023-04-05 19:00",
+    "2024-04-27 12:00",
+    "2024-10-31 09:00"
+  ))
+)
+
+EC_plt_fnc <- function(yvar){
+  GPP_SR_combined_2022_2024 %>%
+  ggplot() +
+  geom_rect(
+    data = shaded_periods,
+    aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf),
+    inherit.aes = FALSE,
+    alpha = 0.5, fill = "grey"
+    ) +
+  geom_point(aes(Datetime_hr_CST, {{yvar}}), alpha = 0.6) +
+  theme_classic() +
+  theme_template
+}
+```
+
+```{r plot}
+
+p_GPP <- EC_plt_fnc(GPP) + xlab("") + ylab("GPP (µmol CO₂ m⁻² s⁻¹)") 
+p_Ts <- EC_plt_fnc(TS_1_1_1) + xlab("") + ylab(expression(T[s]~(degree*C))) 
+p_VWC <- EC_plt_fnc(SWC_1_1_1) + xlab("") + ylab("VWC (%)") + theme(axis.text.x = element_text(size = 20))
+
+p_PAR <- EC_plt_fnc(PPFD_IN_1_1_1) + xlab("") + ylab("PAR (µmol m⁻² s⁻¹)")
+
+cowplot::plot_grid(p_GPP, p_Ts, p_VWC, ncol = 1, align = "hv", axis = "tblr")
+```
+

@@ -1,0 +1,199 @@
+---
+title: "Untitled"
+author: "MOEKA"
+date: "2025-05-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r read Eddyproc results}
+setwd("G:/My Drive/Research/Projects/DC_auto/Data/GPP/GPP_raw/")
+
+EC22 <- read.table("CRK_2022_rpresult.txt", header = T) %>% slice(-1)
+EC23 <- read.table("CRK_2023_rpresult.txt", header = T) %>% slice(-1)
+EC24 <- read.table("CRK_2024_rpresult.txt", header = T) %>% slice(-1)
+
+EC <- 
+  rbind(EC22, EC23, EC24) %>% 
+  mutate(DoY_hr = as.numeric(DoY) + as.numeric(Hour))
+
+EC_GPP <- 
+  EC %>% 
+  select(Year, DoY, Hour, GPP_f, GPP_fqc) 
+```
+
+```{r GPP to hour}
+GPP_hr <- function(df){
+  df %>% 
+    select(Year, DoY, Hour, GPP_f, GPP_fqc) %>% 
+    mutate(
+      Hour_agg = floor(as.numeric(Hour)),
+      GPP = ifelse(GPP_fqc %in% c("-9999", "2", "3"), NA, as.numeric(GPP_f))
+    ) %>%
+  group_by(Year, DoY, Hour_agg) %>%
+  summarise(GPP_mean = mean(GPP, na.rm = T), .groups = "drop") %>% 
+  rename(GPP = GPP_mean)
+}
+
+EC_GPP_hr_2022_2024 <- 
+  GPP_hr(EC_GPP) %>% 
+  mutate(
+    DoY_hr = as.numeric(DoY) + Hour_agg/24,
+    Year = as.numeric(Year),
+    DoY = as.numeric(DoY)
+    ) %>% 
+  rename(Hour = Hour_agg)
+
+write.csv(EC_GPP_hr_2022_2024, "G:/My Drive/Research/Projects/DC_auto/Data/GPP/GPP_hr_2022_2024.csv", row.names = F)
+```
+
+```{r read EC biomet}
+setwd("G:/My Drive/Research/Projects/DC_auto/Data/Biomet")
+
+biomet_22_raw <- read.csv("US-CRK_HH_202201010000_202301010000.csv")
+biomet_23_raw <- read.csv("US-CRK_HH_202301010000_202401010000.csv")
+biomet_24_raw <- read.csv("US-CRK_HH_202401010000_202501010000.csv")
+
+biomet_raw <- rbind(biomet_22_raw, biomet_23_raw, biomet_24_raw)
+```
+
+```{r EC biomet to hr}
+biomet_hr <- 
+  function(df){
+      df %>%
+      # WATCH OUT: ymd_hm set timezone as UTC as default
+      # Use tzone = "Etc/GMT+6" instead of "America/Chicago"
+      # the latter generates daylight saving time and NA as default and no way prevending from it
+      mutate(TIMESTAMP_START = force_tz(ymd_hm(TIMESTAMP_START), tzone = "Etc/GMT+6"),
+             TIMESTAMP_END = force_tz(ymd_hm(TIMESTAMP_END), tzone = "Etc/GMT+6")) %>%
+      mutate(across(where(is.numeric), na_if, -9999)) %>%  # change -9999 to NA
+      mutate(Datetime_hr_CST = floor_date(TIMESTAMP_START, unit = "hour")) %>%
+      group_by(Datetime_hr_CST) %>%
+      summarise(across(c(PPFD_IN_1_1_1, TS_1_1_1, SWC_1_1_1), ~ mean(.x, na.rm = TRUE))) %>%  # aggregate to hourly
+      mutate(
+        Year = year(Datetime_hr_CST),
+        DoY = yday(Datetime_hr_CST),
+        Hour = hour(Datetime_hr_CST),
+        DoY_hr = DoY + Hour/24
+        )
+  }
+
+biomet_2022_2024 <- biomet_hr(biomet_raw) 
+  
+write.csv(biomet_2022_2024, "G:/My Drive/Research/Projects/DC_auto/Data/Biomet/biomet_hr_2022_2024.csv", row.names = F)
+```
+
+```{r combined dfs}
+SR_GPP_combined_2022_2024 <- 
+  left_join(biomet_2022_2024, cont_qaqc_hr %>% select(-Datetime_hr_CST), by = c("Year", "DoY", "DoY_hr")) %>% 
+  left_join(EC_GPP_hr_2022_2024 %>% select(-Hour),  by = c("Year", "DoY", "DoY_hr"))
+
+write.csv(SR_GPP_combined_2022_2024, "G:/My Drive/Research/Projects/DC_auto/Data/GPP_SR_combined/GPP_SR_combined_2022_2024.csv", row.names = F)
+```
+
+```{r}
+GPP_MJ22 <- read.csv("G:/My Drive/Research/Projects/DC_auto/Data/GPP/GPP_May2022.csv")
+GPP_MA23 <- read.csv("G:/My Drive/Research/Projects/DC_auto/Data/GPP/GPP_Mar2023.csv")
+GPP_MA24 <- readxl::read_xlsx("G:/My Drive/Research/Projects/DC_auto/Data/GPP/GPP_MA2024.xlsx")
+GPP_SO24 <- readxl::read_xlsx("G:/My Drive/Research/Projects/DC_auto/Data/GPP/GPP_SO2024.xlsx")
+```
+
+
+
+
+```{r}
+# MJ22
+
+SR_MJ22 <- read.csv("G:/My Drive/Research/Projects/DC_auto/Data/SR_combined/C1.csv")
+# make sure the original date is yyyy/mm/dd hh:mm
+SR_MJ22 <- SR_MJ22 %>% mutate(date = ymd_hm(date))
+
+GPP_SR_MJ22 <- 
+  left_join(
+    SR_MJ22 %>% 
+      mutate(
+        DoY = yday(date),
+        Hour_agg = hour(date)
+      ) %>% 
+      select(c(date, DoY, Hour_agg, PPFD_IN_1_1_1, TS_1_1_1, SWC_1_1_1, SR1, SR2, SR3, Rh, Ra1, Ra2, Ra3)),
+    GPP_hr(GPP_MJ22),
+    by = c("DoY", "Hour_agg")
+    ) %>% 
+  rename(GPP = 'GPP_mean')
+
+#write.csv(GPP_SR_MJ22, "G:/My Drive/Research/Projects/DC_auto/Data/GPP_SR_combined/GPP_SR_MJ22.csv", row.names = F)
+
+
+# MA23
+
+SR_MA23 <- read.csv("G:/My Drive/Research/Projects/DC_auto/Data/SR_combined/C2.csv") %>% mutate(date = ymd_hm(date))
+# make sure the original date is yyyy/mm/dd hh:mm
+
+GPP_SR_MA23 <- 
+  left_join(
+    SR_MA23 %>% 
+      mutate(
+        DoY = yday(date),
+        Hour_agg = hour(date)
+      ) %>% 
+      select(c(date, DoY, Hour_agg, PPFD_IN_1_1_1, TS_1_1_1, SWC_1_1_1, SR1, SR2, SR3, Rh, Ra1, Ra2, Ra3)),
+    GPP_hr(GPP_MA23),
+    by = c("DoY", "Hour_agg")
+    ) %>% 
+  rename(GPP = 'GPP_mean')
+
+#write.csv(GPP_SR_MA23, "G:/My Drive/Research/Projects/DC_auto/Data/GPP_SR_combined/GPP_SR_MA23.csv", row_names = F)
+
+
+```
+
+```{r}
+# MA24
+C4 <- read.csv("G:/My Drive/Research/Projects/DC_auto/Data/SR_combined/C4.csv")
+C5 <- read.csv("G:/My Drive/Research/Projects/DC_auto/Data/SR_combined/C5.csv")
+
+SR_MA24_temp <- rbind(C4, C5)
+
+GPP_SR_MA24 <- 
+  right_join(
+    SR_MA24_temp %>% 
+      mutate(
+        date = as.POSIXct(date, format = "%Y/%m/%d %H:%M", tz = "Etc/GMT+6"),
+        DoY = yday(date),
+        Hour_agg = hour(date)
+      ) %>% 
+      select(c(date, DoY, Hour_agg, PPFD_IN_1_1_1, TS_1_1_1, SWC_1_1_1, SR1, SR2, SR3, Rh, Ra1, Ra2, Ra3, SR, Ra)),
+    GPP_hr(GPP_MA24),
+    by = c("DoY", "Hour_agg")
+    ) %>% 
+  rename(GPP = 'GPP_mean')
+
+write.csv(GPP_SR_MA24, "G:/My Drive/Research/Projects/DC_auto/Data/GPP_SR_combined/GPP_SR_MA24.csv", row.names = F)
+
+
+# SO24
+C6 <- read.csv("G:/My Drive/Research/Projects/DC_auto/Data/SR_combined/C6.csv")
+C7 <- read.csv("G:/My Drive/Research/Projects/DC_auto/Data/SR_combined/C7.csv")
+
+SR_SO24_temp <- rbind(C6, C7)
+
+GPP_SR_SO24 <- 
+  left_join(
+    SR_SO24_temp %>% 
+        mutate(
+          date = as.POSIXct(date, format = "%Y/%m/%d %H:%M", tz = "Etc/GMT+6"), 
+          DoY = yday(date),
+          Hour_agg = hour(date)
+      ) %>% 
+      select(c(date, DoY, Hour_agg, PPFD_IN_1_1_1, TS_1_1_1, SWC_1_1_1, SR1, SR2, SR3, Rh, Ra1, Ra2, Ra3, SR, Ra)),
+    GPP_hr(GPP_SO24),
+    by = c("DoY", "Hour_agg")
+    ) %>% 
+  rename(GPP = 'GPP_mean')
+
+write.csv(GPP_SR_SO24, "G:/My Drive/Research/Projects/DC_auto/Data/GPP_SR_combined/GPP_SR_SO24.csv")
+```
+

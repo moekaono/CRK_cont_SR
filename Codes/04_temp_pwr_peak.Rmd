@@ -1,0 +1,155 @@
+---
+title: "extracting temporal power peaks"
+author: "MOEKA"
+date: "2025-05-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(lubridate)
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(tidyr)
+library(gridExtra)
+library(purrr)
+```
+
+```{r}
+filenames_raw_pwr <- 
+  list.files("G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_cospectral/raw_64d_one_GPP/df_temporal_pwr/", "*.csv", full.names = T)
+
+filenames_res_pwr <- 
+  list.files("G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_cospectral/raw_64d_one_GPP/df_temporal_pwr/", "*.csv", full.names = T)
+
+```
+
+
+```{r making dfs for diurnal peaks}
+
+temp_pwr_csv <- function(filename){
+  
+  df <- strsplit(filename, "/")[[1]][length(strsplit(filename, "/")[[1]])]
+  
+  resp <- strsplit(df, "_")[[1]][1]
+
+  driver <- ifelse(
+      is.na(strsplit(df, "_")[[1]][3]),
+      NA,
+      sub("\\.csv$", "", strsplit(df, "_")[[1]][2])
+    )
+  campaign <- ifelse(
+      is.na(strsplit(df, "_")[[1]][3]),
+      sub("\\.csv$", "", strsplit(df, "_")[[1]][2]),
+      sub("\\.csv$", "", strsplit(df, "_")[[1]][3])
+    )
+    
+  result <- 
+    read.csv(filename) %>%
+    summarise(
+      pwr_P1 = Power.avg[Period == "1"],
+      pwr_max = max(Power.avg, na.rm = TRUE),
+      pwr_max_period = Period[which.max(Power.avg)]) %>% 
+    mutate(
+      df = df,
+      campaign = campaign,
+      resp = resp,
+      driver = driver
+    ) 
+}
+
+
+raw_pwr <- purrr::map_dfr(filenames_raw_pwr, temp_pwr_csv)
+raw_pwr$campaign <- 
+  factor(raw_pwr$campaign, levels = c("MJ22", "MA23", "MA24", "SO24"))
+raw_pwr <- raw_pwr[order(raw_pwr$resp, raw_pwr$driver, raw_pwr$campaign), ]
+
+                              
+# csv
+write.csv(raw_pwr, "G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_cospectral/raw_64d_one_GPP/temp_pwr_raw.csv", row.names = F)
+
+
+
+raw_pwr <- purrr::map_dfr(filenames_raw_pwr, temp_pwr_csv)
+par_phase$season <- 
+  factor(par_phase$season, levels = c("May22", "Mar23", "Jan24", "Feb24", "Mar24"))
+
+# csv
+#write.csv(raw_pwr, "G:/My Drive/Research/Projects/DC_auto/Data/Nov2024_rerun/temp_pwr_raw.csv", row.names = F)
+
+
+```
+
+
+```{r making plots}
+temp_pwr_plot <- function(filename, file_des) {
+  
+  plot_list <- list()
+  
+  for (i in filename) {
+    
+    # Extract filename from path
+    df <- basename(i)  # cleaner than splitting yourself
+
+    # Extract components from filename
+    split_df <- strsplit(df, "_")[[1]]
+    
+    resp <- split_df[1]
+    driver <- ifelse(length(split_df) < 3, NA, sub("\\.csv$", "", split_df[2]))
+    campaign <- ifelse(length(split_df) < 3, sub("\\.csv$", "", split_df[2]), sub("\\.csv$", "", split_df[3]))
+    
+    # Create plot
+    p1 <- 
+      read.csv(i) %>%
+      ggplot() +
+        geom_line(aes(log2(Period), Power.avg)) +
+        geom_point(
+          data = . %>% filter(!is.na(Power.avg.sig)), 
+          aes(log2(Period), Power.avg.sig), size = 1
+        ) + 
+        theme_classic() +
+        scale_x_continuous(
+          breaks = c(0, 3, 6),
+          labels = c(1, 8, 64)
+        ) +
+        scale_y_continuous(
+          breaks = c(0, 10, 20),
+          limits = c(0, 25)
+        ) +
+        theme(
+          axis.title.x = element_blank(), 
+          axis.text.x = element_text(size = 10),
+          axis.title.y = element_blank(),
+          axis.text.y = element_text(size = 10),
+          legend.title = element_text(size = 10), 
+          legend.text = element_text(size = 10),
+          panel.border = element_rect(colour = "black", fill = NA, linewidth = .5)
+        )
+    
+    plot_list[[i]] <- p1
+    
+    # Save to file
+    file_name <- file.path(file_des, paste(resp, "_", driver, "_",campaign, ".png", sep = ""))
+    png(file_name, width = 560, height = 450, res = 300)
+    print(p1)
+    dev.off()
+  }
+}
+
+
+
+temp_raw_pwr_plt <- 
+  temp_pwr_plot(
+    filenames_raw_pwr, 
+    "G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_cospectral/raw_64d_one_GPP/img_temp_pwr/"
+    )
+
+temp_res_pwr_plt <- 
+  temp_pwr_plot(
+    filenames_res_pwr,
+    "G:/My Drive/Research/Projects/DC_auto/Data/Nov2024_rerun/Re_result_pad_64d_res/img_temp_pwr/"
+    )
+
+```

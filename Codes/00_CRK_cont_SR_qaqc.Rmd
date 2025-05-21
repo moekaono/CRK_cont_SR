@@ -1,0 +1,373 @@
+---
+title: "CRK cont SR - QAQC & plot"
+author: "Moeka"
+date: '2025-05-19'
+output: github_document
+
+---
+
+```{r insatall packages}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+
+library(ggplot2)
+library(dplyr)                  
+library(tidyr)
+library(googlesheets4)
+library(lubridate)
+library(PerformanceAnalytics)
+library(ggpmisc)
+library(Hmisc)
+library(scales)
+library(hms)
+library(readxl)
+
+# doesn't work anymore
+#library(RespChamberProc)
+## How to install RespChamberProc? -> Go to https://freesoft.dev/program/97026756.
+```
+
+
+Note: 
+- 2022-08-16 ~ 2022-08-23: shallow/deep labels were not recorded. Have to be manually added. Port#5 = shallow; Port#14 = deep.
+```{r read df}
+
+setwd("G:/My Drive/Research/Projects/DC_auto/Data/SR")
+
+# 2022-2024
+# function - read and rbind the datasets
+# importBind <- function(x){
+#   temp <- list.files(pattern = paste0("*",x))
+#   bind <- do.call("rbind", lapply(temp, read.csv, header = T))
+#   return(bind)
+# }
+
+# read SoilFluxPro outputs in 2022-2024
+# SR_cont_raw <- importBind("CRK_cont_SFP_qaqc")
+
+SR_cont_raw <- read.csv("CRK_auto_SFP_qaqc_2022_2024.csv")
+
+SR_cont_2022 <- read.csv("CRK_cont_SFP_qaqc_2022.csv") %>% mutate(Exp_R2 = as.double(Exp_R2))
+SR_cont_2023 <- read.csv("CRK_cont_SFP_qaqc_2023.csv")
+SR_cont_2024 <- 
+  read.csv("CRK_cont_SFP_qaqc_2024.csv") %>% 
+  mutate(across(Offset:Lin_R2, as.double)) %>% 
+  mutate(across(Obs.:Port., as.double)) %>% 
+  mutate(across(V1_IV:H2O_Mean, as.double))
+
+SR_cont_raw <- rbind(SR_cont_2022, SR_cont_2023, SR_cont_2024)
+
+str(SR_cont_raw)
+unique(SR_cont_raw$Label)
+
+# function to clean up the variables
+clean_cont <- function(df){  
+  df %>%
+  mutate(Datetime_CST = as.POSIXct(Date_IV, format = "%m/%d/%Y %H:%M", tz = "Etc/GMT+6"),
+         Flux = ifelse(grepl("Exp", CrvFitStatus), Exp_Flux, Lin_Flux),
+         CV = ifelse(grepl("Exp", CrvFitStatus), Exp_FluxCV, Lin_FluxCV),
+         R2 = ifelse(grepl("Exp", CrvFitStatus), as.numeric(Exp_R2), as.numeric(Lin_R2))) %>%
+  filter(!is.na(Datetime_CST)) %>% 
+  distinct()
+  }
+
+# clean up variables
+SR_cont <- clean_cont(SR_cont_raw)
+
+# clean up Label
+SR_cont_v1 <- 
+  SR_cont %>%
+  mutate(Collar = case_when(Label == "shallow" ~ "sh1",
+                            Label == "shallow2" ~ "sh2",
+                            Label == "shallow3" ~ "sh3",
+                            Label == "long" ~ "deep",
+                            TRUE ~ Label)) %>%
+  mutate(Collar = case_when(Collar == "" & Port. == "5" ~ "sh1",
+                            Collar == "" & Port. == "14" ~ "deep",
+                            TRUE ~ Collar))
+
+# should be only 4 types
+unique(SR_cont_v1$Collar)
+
+summary(SR_cont_v1)
+write.csv(SR_cont_v1, "CRK_cont_SFP_qaqc_2022_2024.csv", row.names = F)
+```
+
+"Obs.": doesn't matter much "Port.": Multiplexer port number (0 if not
+using a multiplexer) "Date_IV": date type default is "M/DD/YYYY HH:SS"
+"Offset": Offset (cm) used in volume calculation.
+
+"CrvFitStatus": Curve fit solution. "Exp" means the exponential fit was
+better than the linear fit (Exp_SSN \< Lin\_ SSN). "Lin" means the
+linear fit was still better after the maximum number of iterations, and
+the nonlinear coefficients have therefore been derived from linear fit.
+
+"Exp_Flux": Flux computed from Exponential Fit. "Exp_FluxCV":
+Coefficient of variance (%) of Exp Flux "Exp_R2": Correlation
+coefficient for Exponential Fit. "Exp_Iter": Number of iterations used
+in the Exponential Fit. "Lin_Flux": Flux computed from Linear Fit.
+"Lin_FluxCV": Coefficient of variable (%) of Lin Flux "Lin_R2":
+Correlation coefficient for the Linear Fit. "Observation.Length": The
+original observation length. "V1_IV": Initial values of the voltage
+channel\
+"V1_Mean": Initial values of the voltage channel = Flow signals
+"Cdry_Mean": Chamber CO2 concentration (μmol/mol), corrected for water
+vapor dilution "Tcham_Mean": Air temperature (C) inside the soil chamber
+during an active measurement (if no measurement is active, displays
+Multiplexer case temperature)
+
+"Pressure_Mean": Atmospheric pressure in the optical bench (kPa)
+"H2O_Mean": Chamber water vapor concentration (mmol/mol) "Label": User
+entered at time of data collection. "Vmux": Volume of the multiplexer
+(if used) (cm3)
+
+```{r raw data plot, fig.width=15,fig.height=8}
+
+ggplot(SR_cont_v1) + 
+  geom_point(aes(Datetime_CST, Flux, col = as.character(Collar))) + 
+  theme_bw() 
+
+```
+
+```{r qaqc distribution, eval=FALSE}
+knitr::opts_chunk$set(eval = FALSE)
+# R2
+ggplot(SR_cont_v1, aes(x = R2, col = Collar)) + 
+  geom_freqpoly(bins = 100, size = .8, alpha = .5) + xlim(.96, 1) + theme_bw()
+
+# CV
+ggplot(SR_cont_v1, aes(x = CV, col = Collar)) + 
+  geom_freqpoly(bins = 100, size = .8, alpha = .5) + xlim(.8, 2) + theme_bw()
+
+# Cdry_Mean
+ggplot(SR_cont_v1, aes(x = Cdry_IV, col = Collar)) + 
+  geom_freqpoly(bins = 100, size = .8, alpha = .5) + xlim(350, 1000) + theme_bw()
+
+# V1_Mean
+ggplot(SR_cont_v1, aes(x = V1_IV, col = Collar)) + 
+  geom_freqpoly(bins = 100, size = .8, alpha = .5) + theme_bw()
+
+
+# V1 vs R2
+ggplot(SR_cont_v1, aes(x = V1_IV, y = CV, col = as.character(Collar))) + 
+  geom_point(size = .8, alpha = .5) + theme_bw() + ylim(.8, 10)
+```
+
+
+Try with R2 > .985, CV < 1.25, V1_IV > 2, Flux > 0
+
+Deep collar installation 
+- 1. 2022-04-29 
+- 2. 2023-04-11 
+- 3. 2023-10-29
+- 4. 2024-06-15
+
+
+```{r plot}
+# boxplot after applying 3 variables
+SR_cont_v1 %>% 
+  filter(R2 > .985 & CV < 1.25 & V1_IV > 2 & Flux > 0) %>%
+  ggplot() + 
+  geom_boxplot(aes(as.character(Collar), Flux)) + 
+  theme_bw()
+
+
+# time series
+SR_cont_v1 %>% 
+  filter(R2 > .985 & CV < 1.25 & V1_IV > 2 & Flux > 0) %>% 
+  ggplot() + 
+  geom_point(aes(Datetime_CST, Flux, col = Collar)) +
+  # deep collar insertion
+  geom_vline(xintercept = as.POSIXct(c("2022-04-29", "2023-04-11", "2023-10-29", "2024-06-15")), 
+             linetype = "dashed", color = "black") +
+  theme_bw()
+
+
+
+# suddenly got messier after 2023-08-27 19:00:00. Remove them
+SR_cont_v1 %>% 
+  filter((as.Date(Datetime_CST) > "2023-08-25") & as.Date(Datetime_CST) < "2023-09-03") %>% 
+  ggplot() + geom_point(aes(Datetime_CST, Flux, col = Collar)) + 
+  theme_classic()
+
+
+```
+
+# QAQC 
+### Related to Flux
+- R2 > 0.975
+- CV < 1.9
+- negative Flux
+
+### Related to instrument
+- V1_Mean > 2
+
+### Bad data
+- between 2023-08-25 and 2023-09-03
+- sh3: by early 2024
+- after the deep collar insertion in 6/15/2025
+ (could be a different location)
+
+## Expired/not ready deep collars
+- June-July 2024
+- after Nov 2024
+
+Note: 
+- Negative or very low flux can be captured by CV and V1 but not R2 as they can have clean lines
+- V1 values depend on chambers but all of them should be over 2 when running properly
+- Deep collar still observed very large fluxes which did not appear in other shallow collars even after QAQC with 3 variables above.
+
+
+
+```{r qaqc data, fig.width=15,fig.height=8}
+cont_qaqc <- 
+  SR_cont_v1 %>% 
+  filter(CV < 1.9 & R2 > 0.975 & V1_IV > 2 & Flux > 0) %>% 
+  # bad data
+  filter(!(Datetime_CST > "2023-08-27 19:00:00" & Datetime_CST < "2023-09-03")) %>% 
+  # Remove bad sh3 data 
+  filter(!(Collar == "sh3" & Datetime_CST > "2024-01-01 01:00:00" & Datetime_CST < "2024-06-05 00:00:00")) %>% 
+  # Remove bad data after collar insertion in June 2024
+  filter(!(Datetime_CST > "2024-06-14 01:00:00" & Datetime_CST < "2024-07-05 00:00:00")) %>% 
+  # Remove expired deep data
+  #filter(!(Collar == "deep" & Datetime_CST > "2022-06-15 01:00:00" & Datetime_CST < "2023-03-10 00:00:00")) %>% 
+  # Remove too-early deep data
+  filter(!(Collar == "deep" & Datetime_CST > "2024-06-13 01:00:00" & Datetime_CST < "2024-07-15 00:00:00")) %>% 
+  # Remove expired deep data
+  filter(!(Collar == "deep" & Datetime_CST > "2024-10-31 09:00:00")) %>% 
+  arrange(Datetime_CST) %>% 
+  select(Datetime_CST, Collar, Flux, CV, R2, V1_IV, Offset, Observation.Length, Cdry_Mean, Tcham_Mean, Pressure_Mean, H2O_Mean)
+
+write.csv(cont_qaqc, "CRK_contSR_clean_2022_2024.csv", row.names = F)
+
+
+# time series
+cont_qaqc %>% 
+  ggplot() + 
+  geom_point(aes(Datetime_CST, Flux, col = Collar)) +
+  # deep collar insertion
+  geom_vline(xintercept = as.POSIXct(c("2022-04-29", "2023-04-11", "2023-10-29", "2024-06-15")), 
+             linetype = "dashed", color = "black") +
+  theme_bw()
+
+```
+
+
+```{r hourly}
+cont_qaqc_hr <- 
+  cont_qaqc %>%
+  mutate(Datetime_hr_CST = floor_date(Datetime_CST, unit = "hour")) %>% # round it down
+  select(Datetime_hr_CST, Flux, Collar) %>%
+  pivot_wider(names_from = Collar,
+              values_from = Flux,
+              values_fn = ~ mean(.x, na.rm = TRUE)) %>% # when having duplicates
+  rename(SR1 = sh1, SR2 = sh2, SR3 = sh3, Rh = deep) %>%
+  mutate(Ra1 = SR1 - Rh, Ra2 = SR2 - Rh, Ra3 = SR3 - Rh) %>% 
+  mutate(
+    Year = year(Datetime_hr_CST),
+    DoY = yday(Datetime_hr_CST),
+    DoY_hr = DoY + (hour(Datetime_hr_CST))/24
+    ) %>% 
+  select(Year, DoY, DoY_hr, Datetime_hr_CST, SR1, SR2, SR3, Rh, Ra1, Ra2, Ra3)
+
+
+write.csv(cont_qaqc_hr, "CRK_contSR_clean_hr_2022_2024.csv", row.names = F)
+```
+
+
+
+
+Term_1: 2022-05-22 and 2022-06-12: also available a few days around
+2022-06-26
+
+```{r when the pure Rh is available, fig.width=15,fig.height=8}
+# data availability for 2022
+cont_qaqc %>% 
+  filter(format(as.Date(Datetime_CST),"%Y") == "2022") %>%
+  ggplot() + 
+  geom_point(aes(Datetime_CST, Flux, col = Collar), alpha = .5) + 
+  theme_bw() + labs(color = "Collar type") + 
+  ggtitle("Data avilable in 2022", subtitle = "Deep collar installed on Apr 29th") + 
+  scale_x_datetime(date_breaks = "1 months", date_labels = "%b-%Y") +
+  theme(axis.title.x = element_blank(), axis.text.x = element_text(size = 15),
+        axis.title.y = element_text(size = 15), axis.text.y = element_text(size = 15),
+        legend.title = element_text(size = 15), legend.text = element_text(size = 15),
+        plot.title = element_text(size = 15, face = "bold"))
+
+
+
+# # deep available from 2022-05-22 11:25 am till 2022-06-09 15:25
+# cont_qaqc %>% 
+#   filter(Datetime_CST > "2022-05-22" & Datetime_CST < "2022-06-26") %>% 
+#   ggplot() + geom_point(aes(Datetime_CST, Flux, col = Collar)) + theme_bw() +
+#   ggtitle("1-2 months after deep collar installation", subtitle = "From 2022-05-22 to 2022-06-26")
+# 
+# 
+# cont_qaqc %>% 
+#   filter(Datetime_CST > "2022-11-22" & Datetime_CST < "2022-12-01") %>% 
+#   ggplot() + geom_point(aes(Datetime_CST, Flux, col = as.character(Label))) + theme_bw() + 
+#   ggtitle("7 months after deep collar installation", subtitle = "From 2022-11-23 to 2022-11-30")
+
+
+# # data availability for 2023
+cont_qaqc %>%
+  filter(format(as.Date(Datetime_CST),"%Y") == "2023") %>%
+  ggplot() +
+  geom_point(aes(Datetime_CST, Flux, col = Collar), alpha = .5) +
+  theme_bw() +  labs(color = "Collar type") +
+  ggtitle("Data avilable in 2023", subtitle = "Deep collar installed on Apr 11th & Oct 29th") +
+  scale_x_datetime(date_breaks = "2 months", date_labels = "%b-%Y") +
+  theme(axis.title.x = element_blank(), axis.text.x = element_text(size = 15),
+        axis.title.y = element_text(size = 15), axis.text.y = element_text(size = 15),
+        legend.title = element_text(size = 15), legend.text = element_text(size = 15),
+        plot.title = element_text(size = 15, face = "bold"))
+#  
+# 
+# cont_qaqc %>% 
+#   filter(Datetime_CST < "2023-04-04" & Datetime_CST > "2023-03-10") %>% 
+#   ggplot() + geom_point(aes(Datetime_CST, Flux, col = as.character(Label))) + theme_bw() + 
+#   ggtitle("10-11 months after deep collar installation", subtitle = "From 2023-03-10 to 2023-04-04")
+
+
+# REMOVE OUTLIERS >10
+# cont_qaqc %>% 
+#   filter(Datetime_CST > as.Date("2023-04-25") & Datetime_CST < as.Date("2023-06-08")) %>% 
+#   ggplot() + geom_point(aes(Datetime_CST, Flux, col = as.character(Label))) + theme_bw()+ 
+#   ggtitle("0-2 month after deep collar installation", subtitle = "From 2023-04-30 to 2023-06-08")
+# 
+# cont_qaqc %>% 
+#   filter(Datetime_CST > as.Date("2023-05-23") & Datetime_CST < as.Date("2023-06-08")) %>% 
+#   ggplot() + geom_point(aes(Datetime_CST, Flux, col = as.character(Label))) + theme_bw()+ 
+#   ggtitle("0-2 month after deep collar installation", subtitle = "From 2023-05-20 to 2023-06-08")
+
+
+# looking weird since end of august 2023
+# cont_qaqc %>% 
+#   filter(Datetime_CST < as.Date("2023-09-17") & Datetime_CST > as.Date("2023-08-10")) %>% 
+#   filter(Flux < 10) %>% # did not get removed by filters
+#   ggplot() + geom_point(aes(Datetime_CST, Flux, col = as.character(Label))) + theme_bw() + 
+#   ggtitle("4-5 month after deep collar installation", subtitle = "From 2023-08-10 to 2023-09-17")
+
+
+# # data availability for 2024
+cont_qaqc %>% 
+  filter(format(as.Date(Datetime_CST),"%Y") == "2024") %>%
+  ggplot() + 
+  geom_point(aes(Datetime_CST, Flux, col = Collar), alpha = .5) + 
+  theme_bw() +  labs(color = "Collar type") + 
+  ggtitle("Data avilable in 2024", subtitle = "Deep collar installed on Oct 29th, 2023") + 
+  scale_x_datetime(date_labels = "%b-%Y") +
+  theme(axis.title.x = element_blank(), axis.text.x = element_text(size = 15),
+        axis.title.y = element_text(size = 15), axis.text.y = element_text(size = 15),
+        legend.title = element_text(size = 15), legend.text = element_text(size = 15),
+        plot.title = element_text(size = 15, face = "bold"))
+
+# cont_qaqc %>% 
+#   filter(Datetime_CST > as.Date("2024-01-24") & Datetime_CST < as.Date("2024-02-05")) %>%# filter(Label %in% c("sh2", "deep")) %>%
+#   ggplot() + geom_point(aes(Datetime_CST, Flux, col = as.character(Label)), alpha = .5) + theme_bw() + 
+#   ggtitle("3 months after deep collar installation", subtitle = "From 2024-01-24 to 2024-02-05")
+
+
+```
+
+
+
