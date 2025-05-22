@@ -43,8 +43,8 @@ setwd("G:/My Drive/Research/Projects/DC_auto/Data/SR")
 
 # read SoilFluxPro outputs in 2022-2024
 # SR_cont_raw <- importBind("CRK_cont_SFP_qaqc")
-
-SR_cont_raw <- read.csv("CRK_auto_SFP_qaqc_2022_2024.csv")
+# 
+# SR_cont_raw <- read.csv("CRK_auto_SFP_qaqc_2022_2024.csv")
 
 SR_cont_2022 <- read.csv("CRK_cont_SFP_qaqc_2022.csv") %>% mutate(Exp_R2 = as.double(Exp_R2))
 SR_cont_2023 <- read.csv("CRK_cont_SFP_qaqc_2023.csv")
@@ -185,7 +185,7 @@ SR_cont_v1 %>%
 
 # suddenly got messier after 2023-08-27 19:00:00. Remove them
 SR_cont_v1 %>% 
-  filter((as.Date(Datetime_CST) > "2023-08-25") & as.Date(Datetime_CST) < "2023-09-03") %>% 
+  filter((as.Date(Datetime_CST) > "2023-08-25") & as.Date(Datetime_CST) < "2023-09-20") %>% 
   ggplot() + geom_point(aes(Datetime_CST, Flux, col = Collar)) + 
   theme_classic()
 
@@ -223,7 +223,7 @@ cont_qaqc <-
   SR_cont_v1 %>% 
   filter(CV < 1.9 & R2 > 0.975 & V1_IV > 2 & Flux > 0) %>% 
   # bad data
-  filter(!(Datetime_CST > "2023-08-27 19:00:00" & Datetime_CST < "2023-09-03")) %>% 
+  filter(!(Datetime_CST > "2023-08-27 19:00:00" & Datetime_CST < "2023-09-20")) %>% 
   # Remove bad sh3 data 
   filter(!(Collar == "sh3" & Datetime_CST > "2024-01-01 01:00:00" & Datetime_CST < "2024-06-05 00:00:00")) %>% 
   # Remove bad data after collar insertion in June 2024
