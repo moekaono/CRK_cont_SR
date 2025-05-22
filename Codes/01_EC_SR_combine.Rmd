@@ -31,6 +31,7 @@ GPP_hr <- function(df){
     select(Year, DoY, Hour, GPP_f, GPP_fqc) %>% 
     mutate(
       Hour_agg = floor(as.numeric(Hour)),
+      # use flag 0 and 1
       GPP = ifelse(GPP_fqc %in% c("-9999", "2", "3"), NA, as.numeric(GPP_f))
     ) %>%
   group_by(Year, DoY, Hour_agg) %>%
@@ -93,107 +94,3 @@ SR_GPP_combined_2022_2024 <-
 
 write.csv(SR_GPP_combined_2022_2024, "G:/My Drive/Research/Projects/DC_auto/Data/GPP_SR_combined/GPP_SR_combined_2022_2024.csv", row.names = F)
 ```
-
-```{r}
-GPP_MJ22 <- read.csv("G:/My Drive/Research/Projects/DC_auto/Data/GPP/GPP_May2022.csv")
-GPP_MA23 <- read.csv("G:/My Drive/Research/Projects/DC_auto/Data/GPP/GPP_Mar2023.csv")
-GPP_MA24 <- readxl::read_xlsx("G:/My Drive/Research/Projects/DC_auto/Data/GPP/GPP_MA2024.xlsx")
-GPP_SO24 <- readxl::read_xlsx("G:/My Drive/Research/Projects/DC_auto/Data/GPP/GPP_SO2024.xlsx")
-```
-
-
-
-
-```{r}
-# MJ22
-
-SR_MJ22 <- read.csv("G:/My Drive/Research/Projects/DC_auto/Data/SR_combined/C1.csv")
-# make sure the original date is yyyy/mm/dd hh:mm
-SR_MJ22 <- SR_MJ22 %>% mutate(date = ymd_hm(date))
-
-GPP_SR_MJ22 <- 
-  left_join(
-    SR_MJ22 %>% 
-      mutate(
-        DoY = yday(date),
-        Hour_agg = hour(date)
-      ) %>% 
-      select(c(date, DoY, Hour_agg, PPFD_IN_1_1_1, TS_1_1_1, SWC_1_1_1, SR1, SR2, SR3, Rh, Ra1, Ra2, Ra3)),
-    GPP_hr(GPP_MJ22),
-    by = c("DoY", "Hour_agg")
-    ) %>% 
-  rename(GPP = 'GPP_mean')
-
-#write.csv(GPP_SR_MJ22, "G:/My Drive/Research/Projects/DC_auto/Data/GPP_SR_combined/GPP_SR_MJ22.csv", row.names = F)
-
-
-# MA23
-
-SR_MA23 <- read.csv("G:/My Drive/Research/Projects/DC_auto/Data/SR_combined/C2.csv") %>% mutate(date = ymd_hm(date))
-# make sure the original date is yyyy/mm/dd hh:mm
-
-GPP_SR_MA23 <- 
-  left_join(
-    SR_MA23 %>% 
-      mutate(
-        DoY = yday(date),
-        Hour_agg = hour(date)
-      ) %>% 
-      select(c(date, DoY, Hour_agg, PPFD_IN_1_1_1, TS_1_1_1, SWC_1_1_1, SR1, SR2, SR3, Rh, Ra1, Ra2, Ra3)),
-    GPP_hr(GPP_MA23),
-    by = c("DoY", "Hour_agg")
-    ) %>% 
-  rename(GPP = 'GPP_mean')
-
-#write.csv(GPP_SR_MA23, "G:/My Drive/Research/Projects/DC_auto/Data/GPP_SR_combined/GPP_SR_MA23.csv", row_names = F)
-
-
-```
-
-```{r}
-# MA24
-C4 <- read.csv("G:/My Drive/Research/Projects/DC_auto/Data/SR_combined/C4.csv")
-C5 <- read.csv("G:/My Drive/Research/Projects/DC_auto/Data/SR_combined/C5.csv")
-
-SR_MA24_temp <- rbind(C4, C5)
-
-GPP_SR_MA24 <- 
-  right_join(
-    SR_MA24_temp %>% 
-      mutate(
-        date = as.POSIXct(date, format = "%Y/%m/%d %H:%M", tz = "Etc/GMT+6"),
-        DoY = yday(date),
-        Hour_agg = hour(date)
-      ) %>% 
-      select(c(date, DoY, Hour_agg, PPFD_IN_1_1_1, TS_1_1_1, SWC_1_1_1, SR1, SR2, SR3, Rh, Ra1, Ra2, Ra3, SR, Ra)),
-    GPP_hr(GPP_MA24),
-    by = c("DoY", "Hour_agg")
-    ) %>% 
-  rename(GPP = 'GPP_mean')
-
-write.csv(GPP_SR_MA24, "G:/My Drive/Research/Projects/DC_auto/Data/GPP_SR_combined/GPP_SR_MA24.csv", row.names = F)
-
-
-# SO24
-C6 <- read.csv("G:/My Drive/Research/Projects/DC_auto/Data/SR_combined/C6.csv")
-C7 <- read.csv("G:/My Drive/Research/Projects/DC_auto/Data/SR_combined/C7.csv")
-
-SR_SO24_temp <- rbind(C6, C7)
-
-GPP_SR_SO24 <- 
-  left_join(
-    SR_SO24_temp %>% 
-        mutate(
-          date = as.POSIXct(date, format = "%Y/%m/%d %H:%M", tz = "Etc/GMT+6"), 
-          DoY = yday(date),
-          Hour_agg = hour(date)
-      ) %>% 
-      select(c(date, DoY, Hour_agg, PPFD_IN_1_1_1, TS_1_1_1, SWC_1_1_1, SR1, SR2, SR3, Rh, Ra1, Ra2, Ra3, SR, Ra)),
-    GPP_hr(GPP_SO24),
-    by = c("DoY", "Hour_agg")
-    ) %>% 
-  rename(GPP = 'GPP_mean')
-
-write.csv(GPP_SR_SO24, "G:/My Drive/Research/Projects/DC_auto/Data/GPP_SR_combined/GPP_SR_SO24.csv")
-```
-
