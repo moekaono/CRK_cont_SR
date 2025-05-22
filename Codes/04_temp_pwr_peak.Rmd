@@ -63,7 +63,7 @@ temp_pwr_csv <- function(filename){
 
 raw_pwr <- purrr::map_dfr(filenames_raw_pwr, temp_pwr_csv)
 raw_pwr$campaign <- 
-  factor(raw_pwr$campaign, levels = c("MJ22", "MA23", "MA24", "SO24"))
+  factor(raw_pwr$campaign, levels = c("MJ22", "MA23", "Mar24", "Apr24", "Sep24", "Oct24"))
 raw_pwr <- raw_pwr[order(raw_pwr$resp, raw_pwr$driver, raw_pwr$campaign), ]
 
                               
@@ -74,7 +74,7 @@ write.csv(raw_pwr, "G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_cos
 
 raw_pwr <- purrr::map_dfr(filenames_raw_pwr, temp_pwr_csv)
 par_phase$season <- 
-  factor(par_phase$season, levels = c("May22", "Mar23", "Jan24", "Feb24", "Mar24"))
+  factor(par_phase$season, levels = c("MJ22", "MA23", "Mar24", "Apr24", "Sep24", "Oct24"))
 
 # csv
 #write.csv(raw_pwr, "G:/My Drive/Research/Projects/DC_auto/Data/Nov2024_rerun/temp_pwr_raw.csv", row.names = F)

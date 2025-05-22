@@ -69,11 +69,13 @@ phase_diff_csv <- function(filename){
 
 ts_phase <- purrr::map_dfr(ts_raw_files, phase_diff_csv)
 
-ts_phase$campaign <- 
-  factor(ts_phase$campaign, levels = c("MJ22", "MA23", "MA24", "SO24"))
+campaign <- c("MJ22" = "C1", "MA23" = "C2", "Mar24" = "C3", 
+              "Apr24" = "C4", "Sep24" = "C5", "Oct24" = "C6")
 
-# csv
-write.csv(ts_phase, "G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_cospectral/raw_64d_one_GPP/df_lag_hr/ts_phase.csv", row.names = F)
+ts_phase <- 
+  ts_phase %>%
+  mutate(campaign_num = recode(campaign, !!!campaign))
+
 
 #par_res_phase <- purrr::map_dfr(par_res_files, phase_diff_csv)
 
@@ -83,19 +85,22 @@ write.csv(ts_phase, "G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_co
 
 par_raw_phase <- purrr::map_dfr(par_raw_files, phase_diff_csv)
 
-par_raw_phase$campaign <- 
-  factor(par_raw_phase$campaign, levels = c("MJ22", "MA23", "MA24", "SO24"))
-
-write.csv(par_raw_phase, "G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_cospectral/raw_64d_one_GPP/df_lag_hr/PAR_raw_phase.csv", row.names = F)
-
+par_raw_phase <- 
+  par_raw_phase %>%
+  mutate(campaign_num = recode(campaign, !!!campaign))
 
 gpp_raw_phase <- purrr::map_dfr(gpp_raw_files, phase_diff_csv)
 
-gpp_raw_phase$campaign <- 
-  factor(gpp_raw_phase$campaign, levels = c("MJ22", "MA23", "MA24", "SO24"))
+gpp_raw_phase <- 
+  gpp_raw_phase %>%
+  mutate(campaign_num = recode(campaign, !!!campaign))
 
-write.csv(gpp_raw_phase, "G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_cospectral/raw_64d_one_GPP/df_lag_hr/GPP_raw_phase.csv", row.names = F)
 
+# combined and save
+phase_raw_combined <- 
+  rbind(ts_phase, par_raw_phase, gpp_raw_phase)
+
+write.csv(phase_raw_combined, "G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_cospectral/raw_64d_one_GPP/df_lag_hr/phase_raw_combined.csv", row.names = F)
 ```
 
 
@@ -105,10 +110,10 @@ phase_diff_graph <- function(df, res, driver){
   
   df %>% 
   filter(resp == res) %>% 
-  ggplot(aes(campaign, Phase_hr_avg)) +
+  ggplot(aes(campaign_num, Phase_hr_avg)) +
   geom_point(size = 5) + 
   geom_errorbar(
-    aes(campaign,
+    aes(campaign_num,
         ymin = Phase_hr_avg - Phase_hr_sd,
         ymax = Phase_hr_avg + Phase_hr_sd,
         ),
@@ -116,7 +121,7 @@ phase_diff_graph <- function(df, res, driver){
   ) +
   geom_abline(slope = 0, intercept = 0) + 
   theme_classic() + 
-  ylim(-10, 10) +
+  ylim(-8, 8) +
   ggtitle(paste(res, "vs", driver)) +
   ylab("Lag (Hour)") + 
   theme(
