@@ -40,37 +40,58 @@ gpp_raw_files <- grep("_GPP\\.csv", filenames_raw, value = TRUE)
 phase_diff_csv <- function(filename){
   
   df <- strsplit(filename, "/")[[1]][length(strsplit(filename, "/")[[1]])]
-  campaign <- strsplit(df, "_")[[1]][3]
+  month <- strsplit(df, "_")[[1]][3]
   resp <- strsplit(df, "_")[[1]][2]
   driver <- sub(".csv","", strsplit(df, "_")[[1]][4])
   
   result <- 
     read.csv(filename) %>%
-    select(c(date, NA_flag, pval_period1, Angle_raw)) %>% 
-    mutate(day = as.Date(date), 
-         Angle_raw_2 = ifelse(pval_period1 <= .1, Angle_raw, NA)) %>% 
+    # Angle: NA_flag == "0" & pval_period1 < 0.1
+    select(c(date, NA_flag, pval_period1, Angle)) %>% 
+    mutate(day = as.Date(date)) %>% 
     group_by(day) %>% 
-    summarise(angle_raw_avg = mean(Angle_raw)) %>% 
-    mutate(phase_hr = (angle_raw_avg * 24) / (2 * pi))
+    summarise(angle_avg = mean(Angle, na.rm = T)) %>% 
+    mutate(phase_hr = (angle_avg * 24) / (2 * pi))
   
   result %>% 
     summarise(
       Phase_hr_avg = mean(phase_hr, na.rm = T),
       Phase_hr_sd = sd(phase_hr, na.rm = T)
       ) %>% 
-    mutate(
+    mutate( 
       df = df,
-      campaign = campaign,
+      month = month,
       resp = resp,
       driver = driver
     ) 
 }
 
+# caliculate
+ts_raw_phase <- purrr::map_dfr(ts_raw_files, phase_diff_csv)
+par_raw_phase <- purrr::map_dfr(par_raw_files, phase_diff_csv)
+gpp_raw_phase <- purrr::map_dfr(gpp_raw_files, phase_diff_csv)
 
-ts_phase <- purrr::map_dfr(ts_raw_files, phase_diff_csv)
 
 campaign <- c("MJ22" = "C1", "MA23" = "C2", "Mar24" = "C3", 
               "Apr24" = "C4", "Sep24" = "C5", "Oct24" = "C6")
+season_mo <- c("MJ22" = "Growing", "MA23" = "Dormant", "Mar24" = "Dormant", 
+              "Apr24" = "Growing", "Sep24" = "Growing", "Oct24" = "Dormant")
+
+
+# combined and save
+phase_raw_combined <- 
+  rbind(ts_raw_phase, par_raw_phase, gpp_raw_phase) %>% 
+  mutate(
+    campaign = recode(month, !!!campaign),
+    season = recode(month, !!!season_mo)
+    ) %>% 
+  arrange(resp, driver, campaign)
+
+write.csv(phase_raw_combined, "G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_cospectral/raw_64d_one_GPP/df_lag_hr/phase_raw_combined.csv", row.names = F)
+
+
+
+
 
 ts_phase <- 
   ts_phase %>%
@@ -80,40 +101,19 @@ ts_phase <-
 #par_res_phase <- purrr::map_dfr(par_res_files, phase_diff_csv)
 
 
-# # csv
-# write.csv(par_res_phase_cam, "G:/My Drive/Research/Projects/DC_auto/Data/Nov2024_rerun/Re_PAR_res_phase.csv", row.names = F)
-
-par_raw_phase <- purrr::map_dfr(par_raw_files, phase_diff_csv)
-
-par_raw_phase <- 
-  par_raw_phase %>%
-  mutate(campaign_num = recode(campaign, !!!campaign))
-
-gpp_raw_phase <- purrr::map_dfr(gpp_raw_files, phase_diff_csv)
-
-gpp_raw_phase <- 
-  gpp_raw_phase %>%
-  mutate(campaign_num = recode(campaign, !!!campaign))
-
-
-# combined and save
-phase_raw_combined <- 
-  rbind(ts_phase, par_raw_phase, gpp_raw_phase)
-
-write.csv(phase_raw_combined, "G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_cospectral/raw_64d_one_GPP/df_lag_hr/phase_raw_combined.csv", row.names = F)
 ```
 
 
 ```{r graph}
 
-phase_diff_graph <- function(df, res, driver){
+phase_diff_graph <- function(df, res, driver_var){
   
   df %>% 
-  filter(resp == res) %>% 
-  ggplot(aes(campaign_num, Phase_hr_avg)) +
-  geom_point(size = 5) + 
+  filter(resp == res & driver == driver_var) %>% 
+  ggplot(aes(campaign, Phase_hr_avg, shape = season)) +
+  geom_point(size = 7) + 
   geom_errorbar(
-    aes(campaign_num,
+    aes(campaign,
         ymin = Phase_hr_avg - Phase_hr_sd,
         ymax = Phase_hr_avg + Phase_hr_sd,
         ),
@@ -121,8 +121,8 @@ phase_diff_graph <- function(df, res, driver){
   ) +
   geom_abline(slope = 0, intercept = 0) + 
   theme_classic() + 
-  ylim(-8, 8) +
-  ggtitle(paste(res, "vs", driver)) +
+  ylim(-9, 9) +
+  ggtitle(paste(res, "vs", driver_var)) +
   ylab("Lag (Hour)") + 
   theme(
     axis.title.x = element_blank(),
@@ -130,29 +130,39 @@ phase_diff_graph <- function(df, res, driver){
     axis.title.y = element_text(size = 15),
     axis.text.y = element_text(size = 15),
     axis.ticks.x = element_blank(),
+    plot.title = element_text(size = 15),
+    legend.title = element_blank(),
     panel.border = element_rect(colour = "black", fill = NA, linewidth = 1)
         )
 }
 
 
+# run each case
+p_Rh_PAR <- phase_diff_graph(phase_raw_combined, "Rh", "PAR")
+p_Ra_PAR <- phase_diff_graph(phase_raw_combined, "Ra", "PAR")
 
-p_Rh_PAR <- phase_diff_graph(par_raw_phase, "Rh", "PAR")
-p_Ra_PAR <- phase_diff_graph(par_raw_phase, "Ra", "PAR")
+p_Rh_Ts <- phase_diff_graph(phase_raw_combined, "Rh", "Ts")
+p_Ra_Ts <- phase_diff_graph(phase_raw_combined, "Ra", "Ts")
 
-p_Rh_Ts <- phase_diff_graph(ts_phase, "Rh", "Ts")
-p_Ra_Ts <- phase_diff_graph(ts_phase, "Ra", "Ts")
+p_Rh_GPP <- phase_diff_graph(phase_raw_combined, "Rh", "GPP")
+p_Ra_GPP <- phase_diff_graph(phase_raw_combined, "Ra", "GPP")
 
-p_Rh_GPP <- phase_diff_graph(gpp_raw_phase, "Rh", "GPP")
-p_Ra_GPP <- phase_diff_graph(gpp_raw_phase, "Ra", "GPP")
-
-
-combined_plot <- (p_Rh_GPP + p_Rh_PAR + p_Rh_Ts) / (p_Ra_GPP + p_Ra_PAR + p_Ra_Ts) & ylab(NULL)
-wrap_elements(combined_plot) +
-  labs(tag = "Lag (hour)") +
+# patchwork
+combined_plot <- 
+  (p_Rh_GPP + p_Rh_PAR + p_Rh_Ts) / (p_Ra_GPP + p_Ra_PAR + p_Ra_Ts) +
+  # common legend
+  plot_layout(guides = "collect") & 
   theme(
-    plot.tag = element_text(size = 15, angle = 90),
-    plot.tag.position = "left"
-  )
+    legend.position = "bottom",
+    legend.text = element_text(size = 13)) & 
+  ylab(NULL)
+
+# wrap_elements(combined_plot) +
+#     labs(tag = "Lag (hour)") +
+#     theme(
+#         plot.tag = element_text(size = 15, angle = 90),
+#         plot.tag.position = "left"
+#     )
 
 # res
 phase_diff_graph(par_res_phase_cam, "rRh", "PAR")

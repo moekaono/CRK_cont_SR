@@ -292,13 +292,13 @@ wc_lag_img <- function(result_df, title){
                ) %>%
     ggplot() +
     geom_point(aes(date, 24 * Value / (2 * pi), col = Variable)) +
-    scale_color_manual(breaks=c("Angle", "Angle_1d", "Angle_7d", "Angle_15d"),
+    scale_color_manual(breaks = c("Angle", "Angle_1d", "Angle_7d", "Angle_15d"),
                        values = c("#A0B1BA", "#045275", "#089099", "#7CCBA2")) + 
     theme_classic() + ylab("Hours") + 
     ggtitle(title) +
     geom_abline(slope = 0, intercept = 0) + 
     theme(
-      legend.position="top",
+      legend.position = "top",
       axis.title.x = element_blank(),axis.text.x = element_text(size = 20),
       axis.title.y = element_text(size = 20), axis.text.y = element_text(size = 20),
       legend.title = element_blank(), legend.text = element_text(size = 20),
