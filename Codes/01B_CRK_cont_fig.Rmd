@@ -84,16 +84,16 @@ write.csv(GPP_SR_Oct24, "GPP_SR_Oct24.csv", row.names = F)
 SR_plot <- function(df, Ra_var){
   df %>% 
     rename(Ra = Ra_var) %>% 
-    pivot_longer(cols = c(Ra, Rh), names_to = "Var", values_to = "Value") %>% 
-    mutate(DOY_hr = DoY + Hour_agg/24) %>% 
+    pivot_longer(cols = c(Ra, Rh), names_to = "Var", values_to = "Value") %>%  
     ggplot() +
-    geom_point(aes(DOY_hr, Value, col = factor(Var, levels = c("Ra", "Rh"))),
+    geom_point(aes(DoY_hr, Value, col = factor(Var, levels = c("Ra", "Rh"))),
                alpha = .5) + 
     #scale_color_grey() + 
     theme_classic() +
     labs(color = "") + 
     xlab("") + ylab("") + #xlim(0, 366) +
     scale_y_continuous(breaks = seq(0, 6, 3), limits = c(-1.5, 6.5)) +
+    #scale_x_datetime(date_labels = "%b %Y", date_breaks = "1 month") +
     scale_color_manual(values = c("Ra" = "#20A39E", "Rh" = "darkorange")) +  
     theme(axis.title.x = element_blank(), 
           axis.text.x = element_text(size = 20),
@@ -106,7 +106,10 @@ SR_plot <- function(df, Ra_var){
     
 }
 
-p_SR_MJ22 <- SR_plot(GPP_SR_MJ22, "Ra1") + scale_x_continuous(breaks = seq(140, 170, 20), limits = c(140, 165)) 
+p_SR_MJ22 <- 
+  SR_plot(GPP_SR_MJ22, "Ra1") + 
+  scale_x_continuous(breaks = seq(140, 170, 20), limits = c(140, 165)) 
+
 p_SR_MA23 <- 
   SR_plot(GPP_SR_MA23, "Ra1") + 
   scale_x_continuous(breaks = seq(70, 100, 20), limits = c(70, 100)) + 
@@ -115,9 +118,13 @@ p_SR_MA23 <-
     axis.text.y = element_blank(),
     axis.ticks.y = element_blank()
     )
+
 p_SR_MA24 <- 
-  SR_plot(GPP_SR_MA24, "Ra") + 
+  rbind(GPP_SR_Mar24, GPP_SR_Apr24) %>% 
+  SR_plot("Ra") + 
   scale_x_continuous(breaks = seq(60, 120, 20), limits = c(60, 120)) +
+  geom_vline(xintercept = 92, 
+             linetype = "dashed", color = "black") +
   theme(
     axis.title.y = element_blank(),
     axis.text.y = element_blank(),
@@ -125,14 +132,18 @@ p_SR_MA24 <-
     )
 
 p_SR_SO24 <- 
-  SR_plot(GPP_SR_SO24, "Ra") + 
+  rbind(GPP_SR_Sep24, GPP_SR_Oct24) %>% 
+  SR_plot("Ra") + 
   scale_x_continuous(breaks = seq(240, 310, 20), limits = c(240, 310)) +
+  geom_vline(xintercept = 275, 
+             linetype = "dashed", color = "black") +
   theme(
     axis.title.y = element_blank(),
     axis.text.y = element_blank(),
     axis.ticks.y = element_blank()
     )
 
+# combine
 (p_SR_MJ22 + p_SR_MA23 + p_SR_MA24 + p_SR_SO24) + 
   plot_layout(ncol = 4, guides = "collect", widths = c(1, 1, 2, 2)) & 
     theme(legend.position = "top") & 
@@ -168,14 +179,19 @@ shaded_periods <- data.frame(
     "2022-05-22 11:00",
     "2023-03-15 20:00",
     "2024-03-03 14:00",
-    "2024-09-03 12:00"
+    "2024-04-01 0:00",
+    "2024-09-03 12:00",
+    "2024-10-01 0:00"
   )),
   xmax = as.POSIXct(c(
     "2022-06-09 15:00",
     "2023-04-05 19:00",
+    "2024-03-31 23:59",
     "2024-04-27 12:00",
+    "2024-09-30 23:59",
     "2024-10-31 09:00"
-  ))
+  )),
+  fill_color = c("lightgreen", "tan3", "tan3", "lightgreen", "lightgreen", "tan3")
 )
 
 EC_plt_fnc <- function(yvar){
@@ -184,8 +200,9 @@ EC_plt_fnc <- function(yvar){
   geom_rect(
     data = shaded_periods,
     aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf),
+    fill = shaded_periods$fill_color,  # direct color assignment
     inherit.aes = FALSE,
-    alpha = 0.5, fill = "grey"
+    alpha = 0.3
     ) +
   geom_point(aes(Datetime_hr_CST, {{yvar}}), alpha = 0.6) +
   theme_classic() +
@@ -196,11 +213,12 @@ EC_plt_fnc <- function(yvar){
 ```{r plot}
 
 p_GPP <- EC_plt_fnc(GPP) + xlab("") + ylab("GPP (µmol CO₂ m⁻² s⁻¹)") 
+p_PAR <- EC_plt_fnc(PPFD_IN_1_1_1) + xlab("") + ylab("PAR (µmol m⁻² s⁻¹)")
 p_Ts <- EC_plt_fnc(TS_1_1_1) + xlab("") + ylab(expression(T[s]~(degree*C))) 
 p_VWC <- EC_plt_fnc(SWC_1_1_1) + xlab("") + ylab("VWC (%)") + theme(axis.text.x = element_text(size = 20))
 
-p_PAR <- EC_plt_fnc(PPFD_IN_1_1_1) + xlab("") + ylab("PAR (µmol m⁻² s⁻¹)")
 
-cowplot::plot_grid(p_GPP, p_Ts, p_VWC, ncol = 1, align = "hv", axis = "tblr")
+
+cowplot::plot_grid(p_GPP, p_PAR, p_Ts, p_VWC, ncol = 1, align = "hv", axis = "tblr")
 ```
 
