@@ -1,0 +1,496 @@
+---
+title: "cospectral biophysical vars"
+author: "MOEKA"
+date: "2025-05-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(WaveletComp)
+library(lubridate)
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(tidyr)
+library(broom)
+library(forestmangr)
+library(gridExtra)
+library(purrr)
+```
+
+```{r read df}
+setwd("G:/My Drive/Research/Projects/DC_auto/Data/GPP_SR_combined")
+
+GPP_SR_MJ22 <- read.csv("GPP_SR_MJ22.csv") %>% mutate(date = as.POSIXct(Datetime_hr_CST, tz = "Etc/GMT+6"))
+GPP_SR_MA23 <- read.csv("GPP_SR_MA23.csv") %>% mutate(date = as.POSIXct(Datetime_hr_CST, tz = "Etc/GMT+6"))
+GPP_SR_Mar24 <- read.csv("GPP_SR_Mar24.csv") %>% mutate(date = as.POSIXct(Datetime_hr_CST, tz = "Etc/GMT+6"))
+GPP_SR_Apr24 <- read.csv("GPP_SR_Apr24.csv") %>% mutate(date = as.POSIXct(Datetime_hr_CST, tz = "Etc/GMT+6"))
+GPP_SR_Sep24 <- read.csv("GPP_SR_Sep24.csv") %>% mutate(date = as.POSIXct(Datetime_hr_CST, tz = "Etc/GMT+6"))
+GPP_SR_Oct24 <- read.csv("GPP_SR_Oct24.csv") %>% mutate(date = as.POSIXct(Datetime_hr_CST, tz = "Etc/GMT+6"))
+```
+
+```{r location to save}
+dir_env_pwr = "G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_cospectral/raw_64d_one_GPP/df_temporal_pwr_env/"
+dir_env_diurnal = "G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_cospectral/raw_64d_one_GPP/df_diurnal_env/"
+
+setwd("G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_cospectral/raw_64d_one_GPP/")
+```
+
+```{r function}
+
+wt_avg_35 <- function(df, ymax){
+    
+    if (class(df) != "analyze.wavelet") {
+        stop("Your object class is not 'analyze.wavelet'")
+    }
+    
+    # Create the dataframe
+    output_df <- 
+        data.frame(
+            Period = df[["Period"]], 
+            Power.avg = df[["Power.avg"]],
+            Power.avg.pval = df[["Power.avg.pval"]]
+        ) %>%
+        mutate(Power.avg.sig = ifelse(Power.avg.pval < 0.05, Power.avg, NA))
+    
+    # Create the plot
+    p1 <- 
+        ggplot(output_df) + 
+        geom_line(aes(log2(Period), Power.avg)) +
+        geom_point(aes(log2(Period), Power.avg.sig), size = 3) + 
+        theme_classic() + 
+        ylab("Avg. Wavelet Spectram") + 
+        xlab("Period (days; log scale)") +
+        scale_x_continuous(
+            breaks = c(0, 3, 6),
+            label = c(1, 8, 64)
+        ) +
+        scale_y_continuous(
+            breaks = c(0, 10, 20, 30, 40),
+            limits = c(0, ymax)
+        ) +
+        theme(
+            axis.title.x = element_text(size = 25), 
+            axis.text.x = element_text(size = 25),
+            axis.title.y = element_text(size = 25), 
+            axis.text.y = element_text(size = 25),
+            legend.title = element_text(size = 25), 
+            legend.text = element_text(size = 25),
+            panel.border = element_rect(colour = "black", fill = NA, linewidth = 1)
+        )
+    
+    # Return both the dataframe and plot as a list
+    return(list(df = output_df, plot = p1))
+}
+```
+
+```{r CWT MJ22}
+### MJ22 ###
+wc_GPP_Ts_MJ22 <- coh(GPP_SR_MJ22, "GPP", "TS_1_1_1", 64)
+wc_PAR_Ts_MJ22 <- coh(GPP_SR_MJ22, "PPFD_IN_1_1_1", "TS_1_1_1", 64)
+
+# pwr
+GPP_Ts_MJ22_pwr <- wc_avg(wc_GPP_Ts_MJ22, 25)
+GPP_Ts_MJ22_pwr$plot
+
+PAR_Ts_MJ22_pwr <- wc_avg(wc_PAR_Ts_MJ22, 25)
+PAR_Ts_MJ22_pwr$plot
+
+write.csv(GPP_Ts_MJ22_pwr$df, paste0(dir_env_pwr, "GPP_Ts_MJ22.csv"), row.names = F)
+write.csv(PAR_Ts_MJ22_pwr$df, paste0(dir_env_pwr, "PAR_Ts_MJ22.csv"), row.names = F)
+
+# #heatmap
+# dev.new(width = 6, height = 5, noRStudioGD = TRUE)
+# wc.image(
+#   wc_PAR_Ts_MJ22,
+#   legend.params = 
+#     list(
+#       lab = "cross-wavelet power levels", # axis label
+#       lab.line = 1.5, # distance between bar label and axis label
+#       mar = 5
+#     ), 
+#   lvl = 0.3,
+#   timelab = "",
+#   show.date = T, 
+#   date.format = "%Y-%m-%d %H:%M:%S",
+#   periodlab = "period (days)",
+#   main = "PAR vs Ts"
+# )
+
+# extracting diurnal angle & power patterns from heatmap
+wc_GPP_Ts_MJ22_diurnal <- coh_result(scale_pad(GPP_SR_MJ22, "GPP", "TS_1_1_1"), wc_GPP_Ts_MJ22)
+wc_PAR_Ts_MJ22_diurnal <- coh_result(scale_pad(GPP_SR_MJ22, "PPFD_IN_1_1_1", "TS_1_1_1"), wc_PAR_Ts_MJ22)
+# save as csv
+write.csv(wc_GPP_Ts_MJ22_diurnal, paste0(dir_env_diurnal,"wc_GPP_May22_Ts.csv"), row.names = F)
+write.csv(wc_PAR_Ts_MJ22_diurnal, paste0(dir_env_diurnal,"wc_PAR_May22_Ts.csv"), row.names = F)
+```
+
+```{r WT MJ22}
+wt_GPP_MJ22 <- 
+  analyze.wavelet(wc_GPP_Ts_MJ22$series, "GPP", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+GPP_MJ22_pwr <- wt_avg_35(wt_GPP_MJ22, 35)
+write.csv(GPP_MJ22_pwr$df, paste0(dir_env_pwr, "GPP_MJ22.csv"), row.names = F)
+
+# Ts
+wt_Ts_MJ22 <- 
+  analyze.wavelet(wc_GPP_Ts_MJ22$series, "TS_1_1_1", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+Ts_MJ22_pwr <- wt_avg_35(wt_Ts_MJ22, 35)
+write.csv(Ts_MJ22_pwr$df, paste0(dir_env_pwr, "Ts_MJ22.csv"), row.names = F)
+
+# PAR
+wt_PAR_MJ22 <- 
+  analyze.wavelet(wc_PAR_Ts_MJ22$series, "PPFD_IN_1_1_1", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+PAR_MJ22_pwr <- wt_avg_35(wt_PAR_MJ22, 35)
+write.csv(PAR_MJ22_pwr$df, paste0(dir_env_pwr, "PAR_MJ22.csv"), row.names = F)
+```
+
+```{r CXT MA23}
+### MJ22 ###
+wc_GPP_Ts_MA23 <- coh(GPP_SR_MA23, "GPP", "TS_1_1_1", 64)
+wc_PAR_Ts_MA23 <- coh(GPP_SR_MA23, "PPFD_IN_1_1_1", "TS_1_1_1", 64)
+
+# pwr
+GPP_Ts_MA23_pwr <- wc_avg(wc_GPP_Ts_MA23, 25)
+PAR_Ts_MA23_pwr <- wc_avg(wc_PAR_Ts_MA23, 25)
+
+#csv
+write.csv(GPP_Ts_MA23_pwr$df, paste0(dir_env_pwr, "GPP_Ts_MA23.csv"), row.names = F)
+write.csv(PAR_Ts_MA23_pwr$df, paste0(dir_env_pwr, "PAR_Ts_MA23.csv"), row.names = F)
+
+# extracting diurnal angle & power patterns from heatmap
+wc_GPP_Ts_MA23_diurnal <- coh_result(scale_pad(GPP_SR_MA23, "GPP", "TS_1_1_1"), wc_GPP_Ts_MA23)
+wc_PAR_Ts_MA23_diurnal <- coh_result(scale_pad(GPP_SR_MA23, "PPFD_IN_1_1_1", "TS_1_1_1"), wc_PAR_Ts_MA23)
+
+# save as csv
+write.csv(wc_GPP_Ts_MA23_diurnal, paste0(dir_env_diurnal,"wc_GPP_MA23_Ts.csv"), row.names = F)
+write.csv(wc_PAR_Ts_MA23_diurnal, paste0(dir_env_diurnal,"wc_PAR_MA23_Ts.csv"), row.names = F)
+```
+
+```{r WT MA23}
+wt_GPP_MA23 <- 
+  analyze.wavelet(wc_GPP_Ts_MA23$series, "GPP", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+GPP_MA23_pwr <- wt_avg_35(wt_GPP_MA23, 35)
+write.csv(GPP_MA23_pwr$df, paste0(dir_env_pwr, "GPP_MA23.csv"), row.names = F)
+
+# Ts
+wt_Ts_MA23 <- 
+  analyze.wavelet(wc_GPP_Ts_MA23$series, "TS_1_1_1", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+Ts_MA23_pwr <- wt_avg_35(wt_Ts_MA23, 35)
+write.csv(Ts_MA23_pwr$df, paste0(dir_env_pwr, "Ts_MA23.csv"), row.names = F)
+
+# PAR
+wt_PAR_MA23 <- 
+  analyze.wavelet(wc_PAR_Ts_MA23$series, "PPFD_IN_1_1_1", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+PAR_MA23_pwr <- wt_avg_35(wt_PAR_MA23, 35)
+write.csv(PAR_MA23_pwr$df, paste0(dir_env_pwr, "PAR_MA23.csv"), row.names = F)
+```
+
+```{r CXT Mar24}
+### MJ22 ###
+wc_GPP_Ts_Mar24 <- coh(GPP_SR_Mar24, "GPP", "TS_1_1_1", 64)
+wc_PAR_Ts_Mar24 <- coh(GPP_SR_Mar24, "PPFD_IN_1_1_1", "TS_1_1_1", 64)
+
+# pwr
+GPP_Ts_Mar24_pwr <- wc_avg(wc_GPP_Ts_Mar24, 25)
+PAR_Ts_Mar24_pwr <- wc_avg(wc_PAR_Ts_Mar24, 25)
+
+#csv
+write.csv(GPP_Ts_Mar24_pwr$df, paste0(dir_env_pwr, "GPP_Ts_Mar24.csv"), row.names = F)
+write.csv(PAR_Ts_Mar24_pwr$df, paste0(dir_env_pwr, "PAR_Ts_Mar24.csv"), row.names = F)
+
+# extracting diurnal angle & power patterns from heatmap
+wc_GPP_Ts_Mar24_diurnal <- coh_result(scale_pad(GPP_SR_Mar24, "GPP", "TS_1_1_1"), wc_GPP_Ts_Mar24)
+wc_PAR_Ts_Mar24_diurnal <- coh_result(scale_pad(GPP_SR_Mar24, "PPFD_IN_1_1_1", "TS_1_1_1"), wc_PAR_Ts_Mar24)
+
+# save as csv
+write.csv(wc_GPP_Ts_Mar24_diurnal, paste0(dir_env_diurnal,"wc_GPP_Mar24_Ts.csv"), row.names = F)
+write.csv(wc_PAR_Ts_Mar24_diurnal, paste0(dir_env_diurnal,"wc_PAR_Mar24_Ts.csv"), row.names = F)
+```
+
+```{r WT Mar24}
+wt_GPP_Mar24 <- 
+  analyze.wavelet(wc_GPP_Ts_Mar24$series, "GPP", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+GPP_Mar24_pwr <- wt_avg_35(wt_GPP_Mar24, 35)
+write.csv(GPP_Mar24_pwr$df, paste0(dir_env_pwr, "GPP_Mar24.csv"), row.names = F)
+
+# Ts
+wt_Ts_Mar24 <- 
+  analyze.wavelet(wc_GPP_Ts_Mar24$series, "TS_1_1_1", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+Ts_Mar24_pwr <- wt_avg_35(wt_Ts_Mar24, 35)
+write.csv(Ts_Mar24_pwr$df, paste0(dir_env_pwr, "Ts_Mar24.csv"), row.names = F)
+
+# PAR
+wt_PAR_Mar24 <- 
+  analyze.wavelet(wc_PAR_Ts_Mar24$series, "PPFD_IN_1_1_1", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+PAR_Mar24_pwr <- wt_avg_35(wt_PAR_Mar24, 35)
+write.csv(PAR_Mar24_pwr$df, paste0(dir_env_pwr, "PAR_Mar24.csv"), row.names = F)
+```
+
+```{r CXT Apr24}
+### MJ22 ###
+wc_GPP_Ts_Apr24 <- coh(GPP_SR_Apr24, "GPP", "TS_1_1_1", 64)
+wc_PAR_Ts_Apr24 <- coh(GPP_SR_Apr24, "PPFD_IN_1_1_1", "TS_1_1_1", 64)
+
+# pwr
+GPP_Ts_Apr24_pwr <- wc_avg(wc_GPP_Ts_Apr24, 25)
+PAR_Ts_Apr24_pwr <- wc_avg(wc_PAR_Ts_Apr24, 25)
+
+#csv
+write.csv(GPP_Ts_Apr24_pwr$df, paste0(dir_env_pwr, "GPP_Ts_Apr24.csv"), row.names = F)
+write.csv(PAR_Ts_Apr24_pwr$df, paste0(dir_env_pwr, "PAR_Ts_Apr24.csv"), row.names = F)
+
+# extracting diurnal angle & power patterns from heatmap
+wc_GPP_Ts_Apr24_diurnal <- coh_result(scale_pad(GPP_SR_Apr24, "GPP", "TS_1_1_1"), wc_GPP_Ts_Apr24)
+wc_PAR_Ts_Apr24_diurnal <- coh_result(scale_pad(GPP_SR_Apr24, "PPFD_IN_1_1_1", "TS_1_1_1"), wc_PAR_Ts_Apr24)
+
+# save as csv
+write.csv(wc_GPP_Ts_Apr24_diurnal, paste0(dir_env_diurnal,"wc_GPP_Apr24_Ts.csv"), row.names = F)
+write.csv(wc_PAR_Ts_Apr24_diurnal, paste0(dir_env_diurnal,"wc_PAR_Apr24_Ts.csv"), row.names = F)
+```
+
+```{r WT Apr24}
+wt_GPP_Apr24 <- 
+  analyze.wavelet(wc_GPP_Ts_Apr24$series, "GPP", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+GPP_Apr24_pwr <- wt_avg_35(wt_GPP_Apr24, 35)
+write.csv(GPP_Apr24_pwr$df, paste0(dir_env_pwr, "GPP_Apr24.csv"), row.names = F)
+
+# Ts
+wt_Ts_Apr24 <- 
+  analyze.wavelet(wc_GPP_Ts_Apr24$series, "TS_1_1_1", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+Ts_Apr24_pwr <- wt_avg_35(wt_Ts_Apr24, 35)
+write.csv(Ts_Apr24_pwr$df, paste0(dir_env_pwr, "Ts_Apr24.csv"), row.names = F)
+
+# PAR
+wt_PAR_Apr24 <- 
+  analyze.wavelet(wc_PAR_Ts_Apr24$series, "PPFD_IN_1_1_1", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+PAR_Apr24_pwr <- wt_avg_35(wt_PAR_Apr24, 35)
+write.csv(PAR_Apr24_pwr$df, paste0(dir_env_pwr, "PAR_Apr24.csv"), row.names = F)
+```
+
+```{r CXT Sep24}
+### MJ22 ###
+wc_GPP_Ts_Sep24 <- coh(GPP_SR_Sep24, "GPP", "TS_1_1_1", 64)
+wc_PAR_Ts_Sep24 <- coh(GPP_SR_Sep24, "PPFD_IN_1_1_1", "TS_1_1_1", 64)
+
+# pwr
+GPP_Ts_Sep24_pwr <- wc_avg(wc_GPP_Ts_Sep24, 25)
+PAR_Ts_Sep24_pwr <- wc_avg(wc_PAR_Ts_Sep24, 25)
+
+#csv
+write.csv(GPP_Ts_Sep24_pwr$df, paste0(dir_env_pwr, "GPP_Ts_Sep24.csv"), row.names = F)
+write.csv(PAR_Ts_Sep24_pwr$df, paste0(dir_env_pwr, "PAR_Ts_Sep24.csv"), row.names = F)
+
+# extracting diurnal angle & power patterns from heatmap
+wc_GPP_Ts_Sep24_diurnal <- coh_result(scale_pad(GPP_SR_Sep24, "GPP", "TS_1_1_1"), wc_GPP_Ts_Sep24)
+wc_PAR_Ts_Sep24_diurnal <- coh_result(scale_pad(GPP_SR_Sep24, "PPFD_IN_1_1_1", "TS_1_1_1"), wc_PAR_Ts_Sep24)
+
+# save as csv
+write.csv(wc_GPP_Ts_Sep24_diurnal, paste0(dir_env_diurnal,"wc_GPP_Sep24_Ts.csv"), row.names = F)
+write.csv(wc_PAR_Ts_Sep24_diurnal, paste0(dir_env_diurnal,"wc_PAR_Sep24_Ts.csv"), row.names = F)
+```
+
+```{r WT Sep24}
+wt_GPP_Sep24 <- 
+  analyze.wavelet(wc_GPP_Ts_Sep24$series, "GPP", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+GPP_Sep24_pwr <- wt_avg_35(wt_GPP_Sep24, 35)
+write.csv(GPP_Sep24_pwr$df, paste0(dir_env_pwr, "GPP_Sep24.csv"), row.names = F)
+
+# Ts
+wt_Ts_Sep24 <- 
+  analyze.wavelet(wc_GPP_Ts_Sep24$series, "TS_1_1_1", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+Ts_Sep24_pwr <- wt_avg_35(wt_Ts_Sep24, 35)
+write.csv(Ts_Sep24_pwr$df, paste0(dir_env_pwr, "Ts_Sep24.csv"), row.names = F)
+
+# PAR
+wt_PAR_Sep24 <- 
+  analyze.wavelet(wc_PAR_Ts_Sep24$series, "PPFD_IN_1_1_1", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+PAR_Sep24_pwr <- wt_avg_35(wt_PAR_Sep24, 35)
+write.csv(PAR_Sep24_pwr$df, paste0(dir_env_pwr, "PAR_Sep24.csv"), row.names = F)
+```
+
+```{r CXT Oct24}
+### MJ22 ###
+wc_GPP_Ts_Oct24 <- coh(GPP_SR_Oct24, "GPP", "TS_1_1_1", 64)
+wc_PAR_Ts_Oct24 <- coh(GPP_SR_Oct24, "PPFD_IN_1_1_1", "TS_1_1_1", 64)
+
+# pwr
+GPP_Ts_Oct24_pwr <- wc_avg(wc_GPP_Ts_Oct24, 25)
+PAR_Ts_Oct24_pwr <- wc_avg(wc_PAR_Ts_Oct24, 25)
+
+#csv
+write.csv(GPP_Ts_Oct24_pwr$df, paste0(dir_env_pwr, "GPP_Ts_Oct24.csv"), row.names = F)
+write.csv(PAR_Ts_Oct24_pwr$df, paste0(dir_env_pwr, "PAR_Ts_Oct24.csv"), row.names = F)
+
+# extracting diurnal angle & power patterns from heatmap
+wc_GPP_Ts_Oct24_diurnal <- coh_result(scale_pad(GPP_SR_Oct24, "GPP", "TS_1_1_1"), wc_GPP_Ts_Oct24)
+wc_PAR_Ts_Oct24_diurnal <- coh_result(scale_pad(GPP_SR_Oct24, "PPFD_IN_1_1_1", "TS_1_1_1"), wc_PAR_Ts_Oct24)
+
+# save as csv
+write.csv(wc_GPP_Ts_Oct24_diurnal, paste0(dir_env_diurnal,"wc_GPP_Oct24_Ts.csv"), row.names = F)
+write.csv(wc_PAR_Ts_Oct24_diurnal, paste0(dir_env_diurnal,"wc_PAR_Oct24_Ts.csv"), row.names = F)
+```
+
+```{r WT Oct24}
+wt_GPP_Oct24 <- 
+  analyze.wavelet(wc_GPP_Ts_Oct24$series, "GPP", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+GPP_Oct24_pwr <- wt_avg_35(wt_GPP_Oct24, 35)
+write.csv(GPP_Oct24_pwr$df, paste0(dir_env_pwr, "GPP_Oct24.csv"), row.names = F)
+
+# Ts
+wt_Ts_Oct24 <- 
+  analyze.wavelet(wc_GPP_Ts_Oct24$series, "TS_1_1_1", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+Ts_Oct24_pwr <- wt_avg_35(wt_Ts_Oct24, 35)
+write.csv(Ts_Oct24_pwr$df, paste0(dir_env_pwr, "Ts_Oct24.csv"), row.names = F)
+
+# PAR
+wt_PAR_Oct24 <- 
+  analyze.wavelet(wc_PAR_Ts_Oct24$series, "PPFD_IN_1_1_1", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+PAR_Oct24_pwr <- wt_avg_35(wt_PAR_Oct24, 35)
+write.csv(PAR_Oct24_pwr$df, paste0(dir_env_pwr, "PAR_Oct24.csv"), row.names = F)
+```
