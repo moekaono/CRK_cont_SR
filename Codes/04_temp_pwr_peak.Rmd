@@ -21,6 +21,10 @@ library(purrr)
 filenames_raw_pwr <- 
   list.files("G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_cospectral/raw_64d_one_GPP/df_temporal_pwr/", "*.csv", full.names = T)
 
+filenames_raw_pwr_env <- 
+  list.files("G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_cospectral/raw_64d_one_GPP/df_temporal_pwr_env/", "*.csv", full.names = T)
+
+
 filenames_res_pwr <- 
   list.files("G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_cospectral/raw_64d_one_GPP/df_temporal_pwr/", "*.csv", full.names = T)
 
@@ -28,7 +32,6 @@ filenames_res_pwr <-
 
 
 ```{r making dfs for diurnal peaks}
-
 temp_pwr_csv <- function(filename){
   
   df <- strsplit(filename, "/")[[1]][length(strsplit(filename, "/")[[1]])]
@@ -60,25 +63,23 @@ temp_pwr_csv <- function(filename){
     ) 
 }
 
-
+### for raw resp
 raw_pwr <- purrr::map_dfr(filenames_raw_pwr, temp_pwr_csv)
 raw_pwr$campaign <- 
   factor(raw_pwr$campaign, levels = c("MJ22", "MA23", "Mar24", "Apr24", "Sep24", "Oct24"))
 raw_pwr <- raw_pwr[order(raw_pwr$resp, raw_pwr$driver, raw_pwr$campaign), ]
-
                               
 # csv
 write.csv(raw_pwr, "G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_cospectral/raw_64d_one_GPP/temp_pwr_raw.csv", row.names = F)
 
-
-
-raw_pwr <- purrr::map_dfr(filenames_raw_pwr, temp_pwr_csv)
-par_phase$season <- 
-  factor(par_phase$season, levels = c("MJ22", "MA23", "Mar24", "Apr24", "Sep24", "Oct24"))
-
+### for raw env 
+raw_pwr_env <- purrr::map_dfr(filenames_raw_pwr_env, temp_pwr_csv)
+raw_pwr_env$campaign <- 
+  factor(raw_pwr_env$campaign, levels = c("MJ22", "MA23", "Mar24", "Apr24", "Sep24", "Oct24"))
+raw_pwr_env <- raw_pwr_env[order(raw_pwr_env$resp, raw_pwr_env$driver, raw_pwr_env$campaign), ]
+                              
 # csv
-#write.csv(raw_pwr, "G:/My Drive/Research/Projects/DC_auto/Data/Nov2024_rerun/temp_pwr_raw.csv", row.names = F)
-
+write.csv(raw_pwr_env, "G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_cospectral/raw_64d_one_GPP/temp_pwr_raw_env.csv", row.names = F)
 
 ```
 
@@ -100,9 +101,26 @@ temp_pwr_plot <- function(filename, file_des) {
     driver <- ifelse(length(split_df) < 3, NA, sub("\\.csv$", "", split_df[2]))
     campaign <- ifelse(length(split_df) < 3, sub("\\.csv$", "", split_df[2]), sub("\\.csv$", "", split_df[3]))
     
+    # Determine y-axis settings based on 4th file
+    # 4th = MJ22
+    fourth_data <- read.csv(filename[4])
+    fourth_ymax <- max(fourth_data$Power.avg, na.rm = T)
+
+    # Define dynamic y-axis
+    if (fourth_ymax <= 25) {
+      y_limits <- c(0, 25)
+      y_breaks <- c(0, 10, 20)
+    } else {
+      y_limits <- c(0, 35)
+      y_breaks <- c(0, 10, 20, 30)
+    }
+    
+    # Read data
+    data <- read.csv(i)
+    
     # Create plot
     p1 <- 
-      read.csv(i) %>%
+      data %>%
       ggplot() +
         geom_line(aes(log2(Period), Power.avg)) +
         geom_point(
@@ -115,8 +133,8 @@ temp_pwr_plot <- function(filename, file_des) {
           labels = c(1, 8, 64)
         ) +
         scale_y_continuous(
-          breaks = c(0, 10, 20),
-          limits = c(0, 25)
+          breaks = y_breaks,
+          limits = y_limits
         ) +
         theme(
           axis.title.x = element_blank(), 
@@ -145,6 +163,13 @@ temp_raw_pwr_plt <-
     filenames_raw_pwr, 
     "G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_cospectral/raw_64d_one_GPP/img_temp_pwr/"
     )
+
+temp_raw_pwr_env_plt <- 
+  temp_pwr_plot(
+    filenames_raw_pwr_env, 
+    "G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_cospectral/raw_64d_one_GPP/img_temp_pwr_env/"
+    )
+
 
 temp_res_pwr_plt <- 
   temp_pwr_plot(

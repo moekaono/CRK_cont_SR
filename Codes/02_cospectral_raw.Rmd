@@ -40,7 +40,6 @@ GPP_SR_Sep24 <- read.csv("GPP_SR_Sep24.csv") %>% mutate(date = as.POSIXct(Dateti
 GPP_SR_Oct24 <- read.csv("GPP_SR_Oct24.csv") %>% mutate(date = as.POSIXct(Datetime_hr_CST, tz = "Etc/GMT+6"))
 ```
 
-
 ```{r Prep before the wavelet analysis}
 # normalize with 0 mean and unit variance - use scale()
 
@@ -51,59 +50,6 @@ scale_pad <- function(df, var1, var2){
     mutate(NA_flag = ifelse(!is.na(df[[var1]]) & !is.na(df[[var2]]), "0", "1")) %>%
     mutate(across(where(is.numeric), scale)) %>%
     mutate(across(where(is.numeric), ~replace(., is.na(.), 0)))
-}
-
-# function to calculate daily q10 and base respiration at 20 C
-daily_q10 <- function(df, SR_col, Rh_col, Ra_col){
-  
-  df1 <- df %>%
-    mutate(day = lubridate::date(date)) %>%
-    rename("SR" = !!sym(SR_col)) %>%
-    rename("Rh" = !!sym(Rh_col)) %>%
-    rename("Ra" = !!sym(Ra_col)) 
-
-  
-  # for SR
-  df_SR <- 
-    df1 %>%
-    nls_table(
-      SR ~ R20 * Q10^((TS_1_1_1 - 20) / (10)),
-      mod_start = c(R20 = 4, Q10 = 2),
-      .groups = "day") %>%
-    as.data.frame() %>%
-    rename("SR20" = "b0", "Q10_SR" = "b1")
-  
-  df_Rh <- 
-    df1 %>%
-    nls_table(
-      Rh ~ R20 * Q10^((TS_1_1_1 - 20) / (10)),
-      mod_start = c(R20 = 4, Q10 = 2),
-      .groups = "day") %>%
-    as.data.frame() %>%
-    rename("Rh20" = "b0", "Q10_Rh" = "b1")
-  
-  df_Ra <- 
-    df1 %>%
-    nls_table(
-      Ra ~ R20 * Q10^((TS_1_1_1 - 20) / (10)),
-      mod_start = c(R20 = 4, Q10 = 2),
-      .groups = "day") %>%
-    as.data.frame() %>%
-    rename("Ra20" = "b0", "Q10_Ra" = "b1")
-    
-  
-  df2 <- 
-    list(df_SR, df_Rh, df_Ra) %>% 
-    reduce(full_join, by = 'day') 
-  
-  output <- 
-    left_join(df1, df2, by = "day") %>%
-    mutate(rSR = SR - SR20,
-           rRh = Rh - Rh20,
-           rRa = Ra - Ra20)
-    
-  
-  return(output)
 }
 
 # function to check the amount (%) of the gaps
@@ -156,7 +102,6 @@ save_to_csv <- function(list_of_dfs, dir, fname){
 }
 
 ```
-
 
 ```{r cross wavelet - continuous}
 
@@ -328,11 +273,7 @@ wc_result_summary <- function(orig_df, resp_var, wc_sum_df){
   
   return(results)
 }
-
-                                              
-
 ```
-
 
 ```{r temporal pwr df & ggplot}
 wt_avg <- function(df, ymax){
@@ -429,12 +370,10 @@ wc_avg <- function(df, ymax){
 
 ```
 
-
 ```{r location to save}
 dir_pwr = "G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_cospectral/raw_64d_one_GPP/df_temporal_pwr/"
 dir_diurnal = "G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_cospectral/raw_64d_one_GPP/df_diurnal/"
 ```
-
 
 ```{r CWT MJ2022}
 apply(GPP_SR_MJ22, 2, pMiss)
@@ -537,7 +476,7 @@ wt.image(wt_Rh_MJ22,
          main = "Rh"
 )
 
-# rRa
+# Ra
 wt_Ra_MJ22 <- 
   analyze.wavelet(wc_Ra_MJ22$PAR$series,"Ra1", 
                   loess.span = 0,     ## no detrending required
@@ -566,7 +505,6 @@ wt.image(wt_Ra_MJ22,
          main = "Ra"
 )
 ```
-
 
 ```{r CWT MA2023}
 apply(GPP_SR_MA23, 2, pMiss)

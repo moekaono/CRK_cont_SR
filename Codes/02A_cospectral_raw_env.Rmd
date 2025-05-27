@@ -168,6 +168,24 @@ wt_PAR_MJ22 <-
 
 PAR_MJ22_pwr <- wt_avg_35(wt_PAR_MJ22, 35)
 write.csv(PAR_MJ22_pwr$df, paste0(dir_env_pwr, "PAR_MJ22.csv"), row.names = F)
+
+# VWC 
+wt_VWC_MJ22 <- 
+  GPP_SR_MJ22 %>% 
+  select(date, SWC_1_1_1) %>% 
+  mutate(across(where(is.numeric), scale)) %>% 
+  mutate(across(where(is.numeric), ~replace(., is.na(.), 0))) %>% 
+  analyze.wavelet("SWC_1_1_1",
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)    
+
+VWC_MJ22_pwr <- wt_avg_35(wt_VWC_MJ22, 35)
+write.csv(VWC_MJ22_pwr$df, paste0(dir_env_pwr, "VWC_MJ22.csv"), row.names = F)  
 ```
 
 ```{r CXT MA23}
@@ -233,6 +251,26 @@ wt_PAR_MA23 <-
 
 PAR_MA23_pwr <- wt_avg_35(wt_PAR_MA23, 35)
 write.csv(PAR_MA23_pwr$df, paste0(dir_env_pwr, "PAR_MA23.csv"), row.names = F)
+
+
+# VWC 
+wt_VWC_MA23 <- 
+  GPP_SR_MA23 %>% 
+  select(date, SWC_1_1_1) %>% 
+  mutate(across(where(is.numeric), scale)) %>% 
+  mutate(across(where(is.numeric), ~replace(., is.na(.), 0))) %>% 
+  analyze.wavelet("SWC_1_1_1",
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)    
+
+VWC_MA23_pwr <- wt_avg_35(wt_VWC_MA23, 35)
+write.csv(VWC_MA23_pwr$df, paste0(dir_env_pwr, "VWC_MA23.csv"), row.names = F)  
+
 ```
 
 ```{r CXT Mar24}
@@ -298,6 +336,24 @@ wt_PAR_Mar24 <-
 
 PAR_Mar24_pwr <- wt_avg_35(wt_PAR_Mar24, 35)
 write.csv(PAR_Mar24_pwr$df, paste0(dir_env_pwr, "PAR_Mar24.csv"), row.names = F)
+
+# VWC 
+wt_VWC_Mar24 <- 
+  GPP_SR_Mar24 %>% 
+  select(date, SWC_1_1_1) %>% 
+  mutate(across(where(is.numeric), scale)) %>% 
+  mutate(across(where(is.numeric), ~replace(., is.na(.), 0))) %>% 
+  analyze.wavelet("SWC_1_1_1",
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)    
+
+VWC_Mar24_pwr <- wt_avg_35(wt_VWC_Mar24, 35)
+write.csv(VWC_Mar24_pwr$df, paste0(dir_env_pwr, "VWC_Mar24.csv"), row.names = F)  
 ```
 
 ```{r CXT Apr24}
@@ -363,6 +419,25 @@ wt_PAR_Apr24 <-
 
 PAR_Apr24_pwr <- wt_avg_35(wt_PAR_Apr24, 35)
 write.csv(PAR_Apr24_pwr$df, paste0(dir_env_pwr, "PAR_Apr24.csv"), row.names = F)
+
+# VWC 
+wt_VWC_Apr24 <- 
+  GPP_SR_Apr24 %>% 
+  select(date, SWC_1_1_1) %>% 
+  mutate(across(where(is.numeric), scale)) %>% 
+  mutate(across(where(is.numeric), ~replace(., is.na(.), 0))) %>% 
+  analyze.wavelet("SWC_1_1_1",
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)    
+
+VWC_Apr24_pwr <- wt_avg_35(wt_VWC_Apr24, 35)
+write.csv(VWC_Apr24_pwr$df, paste0(dir_env_pwr, "VWC_Apr24.csv"), row.names = F)  
+
 ```
 
 ```{r CXT Sep24}
@@ -428,6 +503,24 @@ wt_PAR_Sep24 <-
 
 PAR_Sep24_pwr <- wt_avg_35(wt_PAR_Sep24, 35)
 write.csv(PAR_Sep24_pwr$df, paste0(dir_env_pwr, "PAR_Sep24.csv"), row.names = F)
+
+# VWC 
+wt_VWC_Sep24 <- 
+  GPP_SR_Sep24 %>% 
+  select(date, SWC_1_1_1) %>% 
+  mutate(across(where(is.numeric), scale)) %>% 
+  mutate(across(where(is.numeric), ~replace(., is.na(.), 0))) %>% 
+  analyze.wavelet("SWC_1_1_1",
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)    
+
+VWC_Sep24_pwr <- wt_avg_35(wt_VWC_Sep24, 35)
+write.csv(VWC_Sep24_pwr$df, paste0(dir_env_pwr, "VWC_Sep24.csv"), row.names = F)  
 ```
 
 ```{r CXT Oct24}
@@ -493,4 +586,22 @@ wt_PAR_Oct24 <-
 
 PAR_Oct24_pwr <- wt_avg_35(wt_PAR_Oct24, 35)
 write.csv(PAR_Oct24_pwr$df, paste0(dir_env_pwr, "PAR_Oct24.csv"), row.names = F)
+
+# VWC 
+wt_VWC_Oct24 <- 
+  GPP_SR_Oct24 %>% 
+  select(date, SWC_1_1_1) %>% 
+  mutate(across(where(is.numeric), scale)) %>% 
+  mutate(across(where(is.numeric), ~replace(., is.na(.), 0))) %>% 
+  analyze.wavelet("SWC_1_1_1",
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)    
+
+VWC_Oct24_pwr <- wt_avg_35(wt_VWC_Oct24, 35)
+write.csv(VWC_Oct24_pwr$df, paste0(dir_env_pwr, "VWC_Oct24.csv"), row.names = F)  
 ```
