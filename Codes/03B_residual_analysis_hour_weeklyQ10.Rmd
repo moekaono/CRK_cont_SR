@@ -1,0 +1,923 @@
+---
+title: "wavelet angle test"
+author: "Moeka"
+date: "2024-07-04"
+output: github_document
+---
+wavelet analysis: chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj/http://www.hs-stat.com/projects/WaveletComp/WaveletComp_guided_tour.pdf
+
+- would it be better after deciding the period when thinking about the range??
+- Normalization
+All time series should be normalized to have zero mean and unit variance prior to wavelet analysis.  
+
+- Gaps
+Missing values in all the variables should be padded with zeros.
+
+- results files are at DC_auto > Data > result_pad_64d_res
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(WaveletComp)
+library(lubridate)
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(tidyr)
+library(broom)
+library(forestmangr)
+library(gridExtra)
+library(purrr)
+```
+
+```{r read df}
+setwd("G:/My Drive/Research/Projects/DC_auto/Data/GPP_SR_combined")
+
+GPP_SR_MJ22 <- read.csv("GPP_SR_MJ22.csv") %>% mutate(date = as.POSIXct(Datetime_hr_CST, tz = "Etc/GMT+6"))
+GPP_SR_MA23 <- read.csv("GPP_SR_MA23.csv") %>% mutate(date = as.POSIXct(Datetime_hr_CST, tz = "Etc/GMT+6"))
+GPP_SR_Mar24 <- read.csv("GPP_SR_Mar24.csv") %>% mutate(date = as.POSIXct(Datetime_hr_CST, tz = "Etc/GMT+6"))
+GPP_SR_Apr24 <- read.csv("GPP_SR_Apr24.csv") %>% mutate(date = as.POSIXct(Datetime_hr_CST, tz = "Etc/GMT+6"))
+GPP_SR_Sep24 <- read.csv("GPP_SR_Sep24.csv") %>% mutate(date = as.POSIXct(Datetime_hr_CST, tz = "Etc/GMT+6"))
+GPP_SR_Oct24 <- read.csv("GPP_SR_Oct24.csv") %>% mutate(date = as.POSIXct(Datetime_hr_CST, tz = "Etc/GMT+6"))
+```
+
+```{r weekly Q10 function}
+# test: res = hourly obs - hourly model based on moving week Q10
+
+week_q10 <- function(df, SR_col, Rh_col, Ra_col){
+  
+  df1 <- df %>%
+    rename("SR" = !!sym(SR_col),
+           "Rh" = !!sym(Rh_col),
+           "Ra" = !!sym(Ra_col)) %>% 
+    arrange(date)
+
+  # Function to fit the non-linear Q10 model for a rolling window
+  fit_q10_model <- function(data, response_var) {
+    if (nrow(data) < 3) return(data.frame(R20 = NA, Q10 = NA))  # Skip if too few points
+    
+    tryCatch({
+      fit <- nls(
+        as.formula(paste(response_var, "~ R20 * Q10^((TS_1_1_1 - 20) / 10)")),
+        data = data,
+        start = list(R20 = 4, Q10 = 2)
+      )
+      coef_df <- as.data.frame(as.list(coef(fit)))
+      names(coef_df) <- c("R20", "Q10")
+      return(coef_df)
+    }, error = function(e) {
+      return(data.frame(R20 = NA, Q10 = NA))  # Return NA if model fails
+    })
+  }
+
+  # Apply rolling window using 3 days before & 3 days after (total 7-day window)
+  rolling_models <- df1 %>%
+    mutate(
+      SR_model = map(date, ~{
+        data_window <- df1 %>% 
+          filter(abs(difftime(date, .x, units = "days")) <= 3) %>% 
+          filter(!is.na(SR))
+        
+        result <- fit_q10_model(data_window, "SR")
+        #if (nrow(result == 0) data.frame(R20 = NA, Q10 = NA)) else result
+      }),
+      
+      Rh_model = map(date, ~{
+        data_window <- df1 %>% 
+          filter(abs(difftime(date, .x, units = "days")) <= 3) %>% 
+          filter(!is.na(Rh))
+        
+        result <- fit_q10_model(data_window, "Rh")
+        #if (nrow(result == 0) data.frame(R20 = NA, Q10 = NA)) else result
+      }),
+      
+      Ra_model = map(date, ~{
+        data_window <- df1 %>% 
+          filter(abs(difftime(date, .x, units = "days")) <= 3) %>% 
+          filter(!is.na(Ra))
+        
+        result <- fit_q10_model(data_window, "Ra")
+        #if (nrow(result == 0) data.frame(R20 = NA, Q10 = NA)) else result
+      })
+      ) %>%
+    mutate(
+      SR_model = map(SR_model, ~ rename(.x, SR20 = R20, Q10_SR = Q10)),  
+      Rh_model = map(Rh_model, ~ rename(.x, Rh20 = R20, Q10_Rh = Q10)),  
+      Ra_model = map(Ra_model, ~ rename(.x, Ra20 = R20, Q10_Ra = Q10))  
+    ) %>%
+    select(date, SR_model, Rh_model, Ra_model) %>%
+    unnest(c(SR_model, Rh_model, Ra_model))
+
+  # Join with the original data and compute hourly modeled values
+  output <- 
+    left_join(df1, rolling_models, by = "date") %>%
+    mutate(
+      mSR = SR20 * Q10_SR ^ ((TS_1_1_1 - 20) / 10),
+      mRh = Rh20 * Q10_Rh ^ ((TS_1_1_1 - 20) / 10),
+      mRa = Ra20 * Q10_Ra ^ ((TS_1_1_1 - 20) / 10)  # Uses hourly TS_1_1_1
+    ) %>% 
+    mutate(
+      rSR = SR - mSR,
+      rRh = Rh - mRh,
+      rRa = Ra - mRa
+    )
+  
+  return(output)
+}
+```
+
+Run the (co)spectral function in 02 first. Will use the same function below.
+
+```{r location to save}
+# hourly data with seasonal Q10
+dir_res2_pwr = "G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_cospectral/res_64d_one_GPP_hourly_weeklyQ10/df_temporal_pwr/"
+dir_res2_diurnal = "G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_cospectral/res_64d_one_GPP_hourly_weeklyQ10/df_diurnal/"
+dir_res2_df = "G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_cospectral/res_64d_one_GPP_hourly_weeklyQ10/df/"
+```
+
+```{r CWT 2022}
+# take residuals
+GPP_SR_MJ22_res2 <- week_q10(GPP_SR_MJ22, "SR1", "Rh", "Ra1")
+write.csv(GPP_SR_MJ22_res2, paste0(dir_res2_df, "MJ22.csv"), row.names = F)
+
+# residual Rh
+wc_rRh_2_MJ22 <- wc_summary(GPP_SR_MJ22_res2, "rRh")
+
+# heatmap
+wc_img_gen(wc_rRh_2_MJ22, "rRh")
+
+# temporal power data & graph
+rRh_2_GPP_MJ22_pwr <- wc_avg(wc_rRh_2_MJ22$GPP, 25)
+rRh_2_PAR_MJ22_pwr <- wc_avg(wc_rRh_2_MJ22$PAR, 25)
+rRh_2_Ts_MJ22_pwr <- wc_avg(wc_rRh_2_MJ22$Ts, 25)
+rRh_2_VWC_MJ22_pwr <- wc_avg(wc_rRh_2_MJ22$VWC, 25)
+
+# csv output
+write.csv(rRh_2_GPP_MJ22_pwr$df, paste0(dir_res2_pwr, "rRh_GPP_MJ22.csv"), row.names = F)
+write.csv(rRh_2_PAR_MJ22_pwr$df, paste0(dir_res2_pwr, "rRh_PAR_MJ22.csv"), row.names = F)
+write.csv(rRh_2_Ts_MJ22_pwr$df, paste0(dir_res2_pwr, "rRh_Ts_MJ22.csv"), row.names = F)
+write.csv(rRh_2_VWC_MJ22_pwr$df, paste0(dir_res2_pwr, "rRh_VWC_MJ22.csv"), row.names = F)
+
+# extracting diurnal angle & power patterns from heatmap
+wc_rRh_2_MJ22_diurnal_summary <- wc_result_summary(GPP_SR_MJ22_res2, "rRh", wc_rRh_2_MJ22)
+save_to_csv(wc_rRh_2_MJ22_diurnal_summary, dir_res2_diurnal, "wc_rRh_MJ22_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRh_2_MJ22_diurnal_summary$GPP, "GPP"),
+  wc_lag_img(wc_rRh_2_MJ22_diurnal_summary$PAR, "PAR"),
+  wc_lag_img(wc_rRh_2_MJ22_diurnal_summary$Ts, "Ts"),
+  wc_lag_img(wc_rRh_2_MJ22_diurnal_summary$VWC, "VWC"),
+  ncol = 2, nrow = 2, common.legend = T
+)
+
+
+# residual Ra
+wc_rRa_2_MJ22 <- wc_summary(GPP_SR_MJ22_res2, "rRa")
+
+# heatmap
+wc_img_gen(wc_rRa_2_MJ22, "rRa")
+
+# temporal power data & graph
+rRa_2_GPP_MJ22_pwr <- wc_avg(wc_rRa_2_MJ22$GPP, 25)
+rRa_2_PAR_MJ22_pwr <- wc_avg(wc_rRa_2_MJ22$PAR, 25)
+rRa_2_Ts_MJ22_pwr <- wc_avg(wc_rRa_2_MJ22$Ts, 25)
+rRa_2_VWC_MJ22_pwr <- wc_avg(wc_rRa_2_MJ22$VWC, 25)
+
+# csv output
+write.csv(rRa_2_GPP_MJ22_pwr$df, paste0(dir_res2_pwr, "rRa_GPP_MJ22.csv"), row.names = F)
+write.csv(rRa_2_PAR_MJ22_pwr$df, paste0(dir_res2_pwr, "rRa_PAR_MJ22.csv"), row.names = F)
+write.csv(rRa_2_Ts_MJ22_pwr$df, paste0(dir_res2_pwr, "rRa_Ts_MJ22.csv"), row.names = F)
+write.csv(rRa_2_VWC_MJ22_pwr$df, paste0(dir_res2_pwr, "rRa_VWC_MJ22.csv"), row.names = F)
+
+
+# extracting diurnal angle & power patterns from heatmap
+wc_rRa_2_MJ22_diurnal_summary <- wc_result_summary(GPP_SR_MJ22_res2, "rRa", wc_rRa_2_MJ22)
+save_to_csv(wc_rRa_2_MJ22_diurnal_summary, dir_res2_diurnal, "wc_rRa_MJ22_")
+
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRa_2_MJ22_diurnal_summary$GPP, "GPP"),
+  wc_lag_img(wc_rRa_2_MJ22_diurnal_summary$PAR, "PAR"),
+  wc_lag_img(wc_rRa_2_MJ22_diurnal_summary$Ts, "Ts"),
+  wc_lag_img(wc_rRa_2_MJ22_diurnal_summary$VWC, "VWC"),
+  ncol = 2, nrow = 2, common.legend = T
+)
+
+```
+
+```{r WT 2022}
+wt_rRh_2_MJ22 <- 
+  analyze.wavelet(wc_rRh_2_MJ22$PAR$series,"rRh", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+rRh_2_MJ22_pwr <- wt_avg(wt_rRh_2_MJ22, 25)
+write.csv(rRh_2_MJ22_pwr$df, paste0(dir_res2_pwr, "rRh_MJ22.csv"), row.names = F)
+
+wt.image(wt_rRh_2_MJ22,  
+         legend.params = 
+             list(
+                 lab = "wavelet power levels", # axis label
+                 lab.line = 1.5, # distance between bar label and axis label
+                 mar = 5
+             ), 
+         lvl = 0.3,
+         timelab = "",
+         show.date = T, 
+         date.format = "%Y-%m-%d %H:%M:%S",
+         periodlab = "period (days)",
+         main = "rRh"
+)
+
+# rRa
+wt_rRa_2_MJ22 <- 
+  analyze.wavelet(wc_rRa_2_MJ22$PAR$series,"rRa", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+rRa_2_MJ22_pwr <- wt_avg(wt_rRa_2_MJ22, 25)
+write.csv(rRa_2_MJ22_pwr$df, paste0(dir_res2_pwr, "rRa_MJ22.csv"), row.names = F)
+
+wt.image(wt_rRa_2_MJ22,  
+         legend.params = 
+             list(
+                 lab = "wavelet power levels", # axis label
+                 lab.line = 1.5, # distance between bar label and axis label
+                 mar = 5
+             ), 
+         lvl = 0.3,
+         timelab = "",
+         show.date = T, 
+         date.format = "%Y-%m-%d %H:%M:%S",
+         periodlab = "period (days)",
+         main = "rRa"
+)
+```
+
+```{r CWT 2023}
+# take residuals
+GPP_SR_MA23_res2 <- week_q10(GPP_SR_MA23, "SR1", "Rh", "Ra1")
+write.csv(GPP_SR_MA23_res2, paste0(dir_res2_df, "MA23.csv"), row.names = F)
+
+# residual Rh
+wc_rRh_2_MA23 <- wc_summary(GPP_SR_MA23_res2, "rRh")
+
+# heatmap
+wc_img_gen(wc_rRh_2_MA23, "rRh")
+
+# temporal power data & graph
+rRh_2_GPP_MA23_pwr <- wc_avg(wc_rRh_2_MA23$GPP, 25)
+rRh_2_PAR_MA23_pwr <- wc_avg(wc_rRh_2_MA23$PAR, 25)
+rRh_2_Ts_MA23_pwr <- wc_avg(wc_rRh_2_MA23$Ts, 25)
+rRh_2_VWC_MA23_pwr <- wc_avg(wc_rRh_2_MA23$VWC, 25)
+
+# csv output
+write.csv(rRh_2_GPP_MA23_pwr$df, paste0(dir_res2_pwr, "rRh_GPP_MA23.csv"), row.names = F)
+write.csv(rRh_2_PAR_MA23_pwr$df, paste0(dir_res2_pwr, "rRh_PAR_MA23.csv"), row.names = F)
+write.csv(rRh_2_Ts_MA23_pwr$df, paste0(dir_res2_pwr, "rRh_Ts_MA23.csv"), row.names = F)
+write.csv(rRh_2_VWC_MA23_pwr$df, paste0(dir_res2_pwr, "rRh_VWC_MA23.csv"), row.names = F)
+
+# extracting diurnal angle & power patterns from heatmap
+wc_rRh_2_MA23_diurnal_summary <- wc_result_summary(GPP_SR_MA23_res2, "rRh", wc_rRh_2_MA23)
+save_to_csv(wc_rRh_2_MA23_diurnal_summary, dir_res2_diurnal, "wc_rRh_MA23_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRh_2_MA23_diurnal_summary$GPP, "GPP"),
+  wc_lag_img(wc_rRh_2_MA23_diurnal_summary$PAR, "PAR"),
+  wc_lag_img(wc_rRh_2_MA23_diurnal_summary$Ts, "Ts"),
+  wc_lag_img(wc_rRh_2_MA23_diurnal_summary$VWC, "VWC"),
+  ncol = 2, nrow = 2, common.legend = T
+)
+
+
+# residual Ra
+wc_rRa_2_MA23 <- wc_summary(GPP_SR_MA23_res2, "rRa")
+
+# heatmap
+wc_img_gen(wc_rRa_2_MA23, "rRa")
+
+# temporal power data & graph
+rRa_2_GPP_MA23_pwr <- wc_avg(wc_rRa_2_MA23$GPP, 25)
+rRa_2_PAR_MA23_pwr <- wc_avg(wc_rRa_2_MA23$PAR, 25)
+rRa_2_Ts_MA23_pwr <- wc_avg(wc_rRa_2_MA23$Ts, 25)
+rRa_2_VWC_MA23_pwr <- wc_avg(wc_rRa_2_MA23$VWC, 25)
+
+# csv output
+write.csv(rRa_2_GPP_MA23_pwr$df, paste0(dir_res2_pwr, "rRa_GPP_MA23.csv"), row.names = F)
+write.csv(rRa_2_PAR_MA23_pwr$df, paste0(dir_res2_pwr, "rRa_PAR_MA23.csv"), row.names = F)
+write.csv(rRa_2_Ts_MA23_pwr$df, paste0(dir_res2_pwr, "rRa_Ts_MA23.csv"), row.names = F)
+write.csv(rRa_2_VWC_MA23_pwr$df, paste0(dir_res2_pwr, "rRa_VWC_MA23.csv"), row.names = F)
+
+
+# extracting diurnal angle & power patterns from heatmap
+wc_rRa_2_MA23_diurnal_summary <- wc_result_summary(GPP_SR_MA23_res2, "rRa", wc_rRa_2_MA23)
+save_to_csv(wc_rRa_2_MA23_diurnal_summary, dir_res2_diurnal, "wc_rRa_MA23_")
+
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRa_2_MA23_diurnal_summary$GPP, "GPP"),
+  wc_lag_img(wc_rRa_2_MA23_diurnal_summary$PAR, "PAR"),
+  wc_lag_img(wc_rRa_2_MA23_diurnal_summary$Ts, "Ts"),
+  wc_lag_img(wc_rRa_2_MA23_diurnal_summary$VWC, "VWC"),
+  ncol = 2, nrow = 2, common.legend = T
+)
+
+```
+
+```{r WT 2023}
+wt_rRh_2_MA23 <- 
+  analyze.wavelet(wc_rRh_2_MA23$PAR$series,"rRh", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+rRh_2_MA23_pwr <- wt_avg(wt_rRh_2_MA23, 25)
+write.csv(rRh_2_MA23_pwr$df, paste0(dir_res2_pwr, "rRh_MA23.csv"), row.names = F)
+
+wt.image(wt_rRh_2_MA23,  
+         legend.params = 
+             list(
+                 lab = "wavelet power levels", # axis label
+                 lab.line = 1.5, # distance between bar label and axis label
+                 mar = 5
+             ), 
+         lvl = 0.3,
+         timelab = "",
+         show.date = T, 
+         date.format = "%Y-%m-%d %H:%M:%S",
+         periodlab = "period (days)",
+         main = "rRh"
+)
+
+# rRa
+wt_rRa_2_MA23 <- 
+  analyze.wavelet(wc_rRa_2_MA23$PAR$series,"rRa", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+rRa_2_MA23_pwr <- wt_avg(wt_rRa_2_MA23, 25)
+write.csv(rRa_2_MA23_pwr$df, paste0(dir_res2_pwr, "rRa_MA23.csv"), row.names = F)
+
+wt.image(wt_rRa_2_MA23,  
+         legend.params = 
+             list(
+                 lab = "wavelet power levels", # axis label
+                 lab.line = 1.5, # distance between bar label and axis label
+                 mar = 5
+             ), 
+         lvl = 0.3,
+         timelab = "",
+         show.date = T, 
+         date.format = "%Y-%m-%d %H:%M:%S",
+         periodlab = "period (days)",
+         main = "rRa"
+)
+```
+
+```{r CWT Mar24}
+# take residuals
+GPP_SR_Mar24_res2 <- week_q10(GPP_SR_Mar24, "SR", "Rh", "Ra")
+write.csv(GPP_SR_Mar24_res2, paste0(dir_res2_df, "Mar24.csv"), row.names = F)
+
+# residual Rh
+wc_rRh_2_Mar24 <- wc_summary(GPP_SR_Mar24_res2, "rRh")
+
+# heatmap
+wc_img_gen(wc_rRh_2_Mar24, "rRh")
+
+# temporal power data & graph
+rRh_2_GPP_Mar24_pwr <- wc_avg(wc_rRh_2_Mar24$GPP, 25)
+rRh_2_PAR_Mar24_pwr <- wc_avg(wc_rRh_2_Mar24$PAR, 25)
+rRh_2_Ts_Mar24_pwr <- wc_avg(wc_rRh_2_Mar24$Ts, 25)
+rRh_2_VWC_Mar24_pwr <- wc_avg(wc_rRh_2_Mar24$VWC, 25)
+
+# csv output
+write.csv(rRh_2_GPP_Mar24_pwr$df, paste0(dir_res2_pwr, "rRh_GPP_Mar24.csv"), row.names = F)
+write.csv(rRh_2_PAR_Mar24_pwr$df, paste0(dir_res2_pwr, "rRh_PAR_Mar24.csv"), row.names = F)
+write.csv(rRh_2_Ts_Mar24_pwr$df, paste0(dir_res2_pwr, "rRh_Ts_Mar24.csv"), row.names = F)
+write.csv(rRh_2_VWC_Mar24_pwr$df, paste0(dir_res2_pwr, "rRh_VWC_Mar24.csv"), row.names = F)
+
+# extracting diurnal angle & power patterns from heatmap
+wc_rRh_2_Mar24_diurnal_summary <- wc_result_summary(GPP_SR_Mar24_res2, "rRh", wc_rRh_2_Mar24)
+save_to_csv(wc_rRh_2_Mar24_diurnal_summary, dir_res2_diurnal, "wc_rRh_Mar24_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRh_2_Mar24_diurnal_summary$GPP, "GPP"),
+  wc_lag_img(wc_rRh_2_Mar24_diurnal_summary$PAR, "PAR"),
+  wc_lag_img(wc_rRh_2_Mar24_diurnal_summary$Ts, "Ts"),
+  wc_lag_img(wc_rRh_2_Mar24_diurnal_summary$VWC, "VWC"),
+  ncol = 2, nrow = 2, common.legend = T
+)
+
+
+# residual Ra
+wc_rRa_2_Mar24 <- wc_summary(GPP_SR_Mar24_res2, "rRa")
+
+# heatmap
+wc_img_gen(wc_rRa_2_Mar24, "rRa")
+
+# temporal power data & graph
+rRa_2_GPP_Mar24_pwr <- wc_avg(wc_rRa_2_Mar24$GPP, 25)
+rRa_2_PAR_Mar24_pwr <- wc_avg(wc_rRa_2_Mar24$PAR, 25)
+rRa_2_Ts_Mar24_pwr <- wc_avg(wc_rRa_2_Mar24$Ts, 25)
+rRa_2_VWC_Mar24_pwr <- wc_avg(wc_rRa_2_Mar24$VWC, 25)
+
+# csv output
+write.csv(rRa_2_GPP_Mar24_pwr$df, paste0(dir_res2_pwr, "rRa_GPP_Mar24.csv"), row.names = F)
+write.csv(rRa_2_PAR_Mar24_pwr$df, paste0(dir_res2_pwr, "rRa_PAR_Mar24.csv"), row.names = F)
+write.csv(rRa_2_Ts_Mar24_pwr$df, paste0(dir_res2_pwr, "rRa_Ts_Mar24.csv"), row.names = F)
+write.csv(rRa_2_VWC_Mar24_pwr$df, paste0(dir_res2_pwr, "rRa_VWC_Mar24.csv"), row.names = F)
+
+
+# extracting diurnal angle & power patterns from heatmap
+wc_rRa_2_Mar24_diurnal_summary <- wc_result_summary(GPP_SR_Mar24_res2, "rRa", wc_rRa_2_Mar24)
+save_to_csv(wc_rRa_2_Mar24_diurnal_summary, dir_res2_diurnal, "wc_rRa_Mar24_")
+
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRa_2_Mar24_diurnal_summary$GPP, "GPP"),
+  wc_lag_img(wc_rRa_2_Mar24_diurnal_summary$PAR, "PAR"),
+  wc_lag_img(wc_rRa_2_Mar24_diurnal_summary$Ts, "Ts"),
+  wc_lag_img(wc_rRa_2_Mar24_diurnal_summary$VWC, "VWC"),
+  ncol = 2, nrow = 2, common.legend = T
+)
+
+```
+
+```{r WT Mar24}
+wt_rRh_2_Mar24 <- 
+  analyze.wavelet(wc_rRh_2_Mar24$PAR$series,"rRh", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+rRh_2_Mar24_pwr <- wt_avg(wt_rRh_2_Mar24, 25)
+write.csv(rRh_2_Mar24_pwr$df, paste0(dir_res2_pwr, "rRh_Mar24.csv"), row.names = F)
+
+wt.image(wt_rRh_2_Mar24,  
+         legend.params = 
+             list(
+                 lab = "wavelet power levels", # axis label
+                 lab.line = 1.5, # distance between bar label and axis label
+                 mar = 5
+             ), 
+         lvl = 0.3,
+         timelab = "",
+         show.date = T, 
+         date.format = "%Y-%m-%d %H:%M:%S",
+         periodlab = "period (days)",
+         main = "rRh"
+)
+
+# rRa
+wt_rRa_2_Mar24 <- 
+  analyze.wavelet(wc_rRa_2_Mar24$PAR$series,"rRa", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+rRa_2_Mar24_pwr <- wt_avg(wt_rRa_2_Mar24, 25)
+write.csv(rRa_2_Mar24_pwr$df, paste0(dir_res2_pwr, "rRa_Mar24.csv"), row.names = F)
+
+wt.image(wt_rRa_2_Mar24,  
+         legend.params = 
+             list(
+                 lab = "wavelet power levels", # axis label
+                 lab.line = 1.5, # distance between bar label and axis label
+                 mar = 5
+             ), 
+         lvl = 0.3,
+         timelab = "",
+         show.date = T, 
+         date.format = "%Y-%m-%d %H:%M:%S",
+         periodlab = "period (days)",
+         main = "rRa"
+)
+```
+
+```{r CWT Apr24}
+# take residuals
+GPP_SR_Apr24_res2 <- week_q10(GPP_SR_Apr24, "SR", "Rh", "Ra")
+write.csv(GPP_SR_Apr24_res2, paste0(dir_res2_df, "Apr24.csv"), row.names = F)
+
+# residual Rh
+wc_rRh_2_Apr24 <- wc_summary(GPP_SR_Apr24_res2, "rRh")
+
+# heatmap
+wc_img_gen(wc_rRh_2_Apr24, "rRh")
+
+# temporal power data & graph
+rRh_2_GPP_Apr24_pwr <- wc_avg(wc_rRh_2_Apr24$GPP, 25)
+rRh_2_PAR_Apr24_pwr <- wc_avg(wc_rRh_2_Apr24$PAR, 25)
+rRh_2_Ts_Apr24_pwr <- wc_avg(wc_rRh_2_Apr24$Ts, 25)
+rRh_2_VWC_Apr24_pwr <- wc_avg(wc_rRh_2_Apr24$VWC, 25)
+
+# csv output
+write.csv(rRh_2_GPP_Apr24_pwr$df, paste0(dir_res2_pwr, "rRh_GPP_Apr24.csv"), row.names = F)
+write.csv(rRh_2_PAR_Apr24_pwr$df, paste0(dir_res2_pwr, "rRh_PAR_Apr24.csv"), row.names = F)
+write.csv(rRh_2_Ts_Apr24_pwr$df, paste0(dir_res2_pwr, "rRh_Ts_Apr24.csv"), row.names = F)
+write.csv(rRh_2_VWC_Apr24_pwr$df, paste0(dir_res2_pwr, "rRh_VWC_Apr24.csv"), row.names = F)
+
+# extracting diurnal angle & power patterns from heatmap
+wc_rRh_2_Apr24_diurnal_summary <- wc_result_summary(GPP_SR_Apr24_res2, "rRh", wc_rRh_2_Apr24)
+save_to_csv(wc_rRh_2_Apr24_diurnal_summary, dir_res2_diurnal, "wc_rRh_Apr24_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRh_2_Apr24_diurnal_summary$GPP, "GPP"),
+  wc_lag_img(wc_rRh_2_Apr24_diurnal_summary$PAR, "PAR"),
+  wc_lag_img(wc_rRh_2_Apr24_diurnal_summary$Ts, "Ts"),
+  wc_lag_img(wc_rRh_2_Apr24_diurnal_summary$VWC, "VWC"),
+  ncol = 2, nrow = 2, common.legend = T
+)
+
+
+# residual Ra
+wc_rRa_2_Apr24 <- wc_summary(GPP_SR_Apr24_res2, "rRa")
+
+# heatmap
+wc_img_gen(wc_rRa_2_Apr24, "rRa")
+
+# temporal power data & graph
+rRa_2_GPP_Apr24_pwr <- wc_avg(wc_rRa_2_Apr24$GPP, 25)
+rRa_2_PAR_Apr24_pwr <- wc_avg(wc_rRa_2_Apr24$PAR, 25)
+rRa_2_Ts_Apr24_pwr <- wc_avg(wc_rRa_2_Apr24$Ts, 25)
+rRa_2_VWC_Apr24_pwr <- wc_avg(wc_rRa_2_Apr24$VWC, 25)
+
+# csv output
+write.csv(rRa_2_GPP_Apr24_pwr$df, paste0(dir_res2_pwr, "rRa_GPP_Apr24.csv"), row.names = F)
+write.csv(rRa_2_PAR_Apr24_pwr$df, paste0(dir_res2_pwr, "rRa_PAR_Apr24.csv"), row.names = F)
+write.csv(rRa_2_Ts_Apr24_pwr$df, paste0(dir_res2_pwr, "rRa_Ts_Apr24.csv"), row.names = F)
+write.csv(rRa_2_VWC_Apr24_pwr$df, paste0(dir_res2_pwr, "rRa_VWC_Apr24.csv"), row.names = F)
+
+
+# extracting diurnal angle & power patterns from heatmap
+wc_rRa_2_Apr24_diurnal_summary <- wc_result_summary(GPP_SR_Apr24_res2, "rRa", wc_rRa_2_Apr24)
+save_to_csv(wc_rRa_2_Apr24_diurnal_summary, dir_res2_diurnal, "wc_rRa_Apr24_")
+
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRa_2_Apr24_diurnal_summary$GPP, "GPP"),
+  wc_lag_img(wc_rRa_2_Apr24_diurnal_summary$PAR, "PAR"),
+  wc_lag_img(wc_rRa_2_Apr24_diurnal_summary$Ts, "Ts"),
+  wc_lag_img(wc_rRa_2_Apr24_diurnal_summary$VWC, "VWC"),
+  ncol = 2, nrow = 2, common.legend = T
+)
+
+```
+
+```{r WT Apr24}
+wt_rRh_2_Apr24 <- 
+  analyze.wavelet(wc_rRh_2_Apr24$PAR$series,"rRh", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+rRh_2_Apr24_pwr <- wt_avg(wt_rRh_2_Apr24, 25)
+write.csv(rRh_2_Apr24_pwr$df, paste0(dir_res2_pwr, "rRh_Apr24.csv"), row.names = F)
+
+wt.image(wt_rRh_2_Apr24,  
+         legend.params = 
+             list(
+                 lab = "wavelet power levels", # axis label
+                 lab.line = 1.5, # distance between bar label and axis label
+                 mar = 5
+             ), 
+         lvl = 0.3,
+         timelab = "",
+         show.date = T, 
+         date.format = "%Y-%m-%d %H:%M:%S",
+         periodlab = "period (days)",
+         main = "rRh"
+)
+
+# rRa
+wt_rRa_2_Apr24 <- 
+  analyze.wavelet(wc_rRa_2_Apr24$PAR$series,"rRa", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+rRa_2_Apr24_pwr <- wt_avg(wt_rRa_2_Apr24, 25)
+write.csv(rRa_2_Apr24_pwr$df, paste0(dir_res2_pwr, "rRa_Apr24.csv"), row.names = F)
+
+wt.image(wt_rRa_2_Apr24,  
+         legend.params = 
+             list(
+                 lab = "wavelet power levels", # axis label
+                 lab.line = 1.5, # distance between bar label and axis label
+                 mar = 5
+             ), 
+         lvl = 0.3,
+         timelab = "",
+         show.date = T, 
+         date.format = "%Y-%m-%d %H:%M:%S",
+         periodlab = "period (days)",
+         main = "rRa"
+)
+```
+
+```{r CWT Sep24}
+# take residuals
+GPP_SR_Sep24_res2 <- week_q10(GPP_SR_Sep24, "SR", "Rh", "Ra")
+write.csv(GPP_SR_Sep24_res2, paste0(dir_res2_df, "Sep24.csv"), row.names = F)
+
+# residual Rh
+wc_rRh_2_Sep24 <- wc_summary(GPP_SR_Sep24_res2, "rRh")
+
+# heatmap
+wc_img_gen(wc_rRh_2_Sep24, "rRh")
+
+# temporal power data & graph
+rRh_2_GPP_Sep24_pwr <- wc_avg(wc_rRh_2_Sep24$GPP, 25)
+rRh_2_PAR_Sep24_pwr <- wc_avg(wc_rRh_2_Sep24$PAR, 25)
+rRh_2_Ts_Sep24_pwr <- wc_avg(wc_rRh_2_Sep24$Ts, 25)
+rRh_2_VWC_Sep24_pwr <- wc_avg(wc_rRh_2_Sep24$VWC, 25)
+
+# csv output
+write.csv(rRh_2_GPP_Sep24_pwr$df, paste0(dir_res2_pwr, "rRh_GPP_Sep24.csv"), row.names = F)
+write.csv(rRh_2_PAR_Sep24_pwr$df, paste0(dir_res2_pwr, "rRh_PAR_Sep24.csv"), row.names = F)
+write.csv(rRh_2_Ts_Sep24_pwr$df, paste0(dir_res2_pwr, "rRh_Ts_Sep24.csv"), row.names = F)
+write.csv(rRh_2_VWC_Sep24_pwr$df, paste0(dir_res2_pwr, "rRh_VWC_Sep24.csv"), row.names = F)
+
+# extracting diurnal angle & power patterns from heatmap
+wc_rRh_2_Sep24_diurnal_summary <- wc_result_summary(GPP_SR_Sep24_res2, "rRh", wc_rRh_2_Sep24)
+save_to_csv(wc_rRh_2_Sep24_diurnal_summary, dir_res2_diurnal, "wc_rRh_Sep24_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRh_2_Sep24_diurnal_summary$GPP, "GPP"),
+  wc_lag_img(wc_rRh_2_Sep24_diurnal_summary$PAR, "PAR"),
+  wc_lag_img(wc_rRh_2_Sep24_diurnal_summary$Ts, "Ts"),
+  wc_lag_img(wc_rRh_2_Sep24_diurnal_summary$VWC, "VWC"),
+  ncol = 2, nrow = 2, common.legend = T
+)
+
+
+# residual Ra
+wc_rRa_2_Sep24 <- wc_summary(GPP_SR_Sep24_res2, "rRa")
+
+# heatmap
+wc_img_gen(wc_rRa_2_Sep24, "rRa")
+
+# temporal power data & graph
+rRa_2_GPP_Sep24_pwr <- wc_avg(wc_rRa_2_Sep24$GPP, 25)
+rRa_2_PAR_Sep24_pwr <- wc_avg(wc_rRa_2_Sep24$PAR, 25)
+rRa_2_Ts_Sep24_pwr <- wc_avg(wc_rRa_2_Sep24$Ts, 25)
+rRa_2_VWC_Sep24_pwr <- wc_avg(wc_rRa_2_Sep24$VWC, 25)
+
+# csv output
+write.csv(rRa_2_GPP_Sep24_pwr$df, paste0(dir_res2_pwr, "rRa_GPP_Sep24.csv"), row.names = F)
+write.csv(rRa_2_PAR_Sep24_pwr$df, paste0(dir_res2_pwr, "rRa_PAR_Sep24.csv"), row.names = F)
+write.csv(rRa_2_Ts_Sep24_pwr$df, paste0(dir_res2_pwr, "rRa_Ts_Sep24.csv"), row.names = F)
+write.csv(rRa_2_VWC_Sep24_pwr$df, paste0(dir_res2_pwr, "rRa_VWC_Sep24.csv"), row.names = F)
+
+
+# extracting diurnal angle & power patterns from heatmap
+wc_rRa_2_Sep24_diurnal_summary <- wc_result_summary(GPP_SR_Sep24_res2, "rRa", wc_rRa_2_Sep24)
+save_to_csv(wc_rRa_2_Sep24_diurnal_summary, dir_res2_diurnal, "wc_rRa_Sep24_")
+
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRa_2_Sep24_diurnal_summary$GPP, "GPP"),
+  wc_lag_img(wc_rRa_2_Sep24_diurnal_summary$PAR, "PAR"),
+  wc_lag_img(wc_rRa_2_Sep24_diurnal_summary$Ts, "Ts"),
+  wc_lag_img(wc_rRa_2_Sep24_diurnal_summary$VWC, "VWC"),
+  ncol = 2, nrow = 2, common.legend = T
+)
+
+```
+
+```{r WT Sep24}
+wt_rRh_2_Sep24 <- 
+  analyze.wavelet(wc_rRh_2_Sep24$PAR$series,"rRh", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+rRh_2_Sep24_pwr <- wt_avg(wt_rRh_2_Sep24, 25)
+write.csv(rRh_2_Sep24_pwr$df, paste0(dir_res2_pwr, "rRh_Sep24.csv"), row.names = F)
+
+wt.image(wt_rRh_2_Sep24,  
+         legend.params = 
+             list(
+                 lab = "wavelet power levels", # axis label
+                 lab.line = 1.5, # distance between bar label and axis label
+                 mar = 5
+             ), 
+         lvl = 0.3,
+         timelab = "",
+         show.date = T, 
+         date.format = "%Y-%m-%d %H:%M:%S",
+         periodlab = "period (days)",
+         main = "rRh"
+)
+
+# rRa
+wt_rRa_2_Sep24 <- 
+  analyze.wavelet(wc_rRa_2_Sep24$PAR$series,"rRa", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+rRa_2_Sep24_pwr <- wt_avg(wt_rRa_2_Sep24, 25)
+write.csv(rRa_2_Sep24_pwr$df, paste0(dir_res2_pwr, "rRa_Sep24.csv"), row.names = F)
+
+wt.image(wt_rRa_2_Sep24,  
+         legend.params = 
+             list(
+                 lab = "wavelet power levels", # axis label
+                 lab.line = 1.5, # distance between bar label and axis label
+                 mar = 5
+             ), 
+         lvl = 0.3,
+         timelab = "",
+         show.date = T, 
+         date.format = "%Y-%m-%d %H:%M:%S",
+         periodlab = "period (days)",
+         main = "rRa"
+)
+```
+
+```{r CWT Oct24}
+# take residuals
+GPP_SR_Oct24_res2 <- week_q10(GPP_SR_Oct24, "SR", "Rh", "Ra")
+write.csv(GPP_SR_Oct24_res2, paste0(dir_res2_df, "Oct24.csv"), row.names = F)
+
+# residual Rh
+wc_rRh_2_Oct24 <- wc_summary(GPP_SR_Oct24_res2, "rRh")
+
+# heatmap
+wc_img_gen(wc_rRh_2_Oct24, "rRh")
+
+# temporal power data & graph
+rRh_2_GPP_Oct24_pwr <- wc_avg(wc_rRh_2_Oct24$GPP, 25)
+rRh_2_PAR_Oct24_pwr <- wc_avg(wc_rRh_2_Oct24$PAR, 25)
+rRh_2_Ts_Oct24_pwr <- wc_avg(wc_rRh_2_Oct24$Ts, 25)
+rRh_2_VWC_Oct24_pwr <- wc_avg(wc_rRh_2_Oct24$VWC, 25)
+
+# csv output
+write.csv(rRh_2_GPP_Oct24_pwr$df, paste0(dir_res2_pwr, "rRh_GPP_Oct24.csv"), row.names = F)
+write.csv(rRh_2_PAR_Oct24_pwr$df, paste0(dir_res2_pwr, "rRh_PAR_Oct24.csv"), row.names = F)
+write.csv(rRh_2_Ts_Oct24_pwr$df, paste0(dir_res2_pwr, "rRh_Ts_Oct24.csv"), row.names = F)
+write.csv(rRh_2_VWC_Oct24_pwr$df, paste0(dir_res2_pwr, "rRh_VWC_Oct24.csv"), row.names = F)
+
+# extracting diurnal angle & power patterns from heatmap
+wc_rRh_2_Oct24_diurnal_summary <- wc_result_summary(GPP_SR_Oct24_res2, "rRh", wc_rRh_2_Oct24)
+save_to_csv(wc_rRh_2_Oct24_diurnal_summary, dir_res2_diurnal, "wc_rRh_Oct24_")
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRh_2_Oct24_diurnal_summary$GPP, "GPP"),
+  wc_lag_img(wc_rRh_2_Oct24_diurnal_summary$PAR, "PAR"),
+  wc_lag_img(wc_rRh_2_Oct24_diurnal_summary$Ts, "Ts"),
+  wc_lag_img(wc_rRh_2_Oct24_diurnal_summary$VWC, "VWC"),
+  ncol = 2, nrow = 2, common.legend = T
+)
+
+
+# residual Ra
+wc_rRa_2_Oct24 <- wc_summary(GPP_SR_Oct24_res2, "rRa")
+
+# heatmap
+wc_img_gen(wc_rRa_2_Oct24, "rRa")
+
+# temporal power data & graph
+rRa_2_GPP_Oct24_pwr <- wc_avg(wc_rRa_2_Oct24$GPP, 25)
+rRa_2_PAR_Oct24_pwr <- wc_avg(wc_rRa_2_Oct24$PAR, 25)
+rRa_2_Ts_Oct24_pwr <- wc_avg(wc_rRa_2_Oct24$Ts, 25)
+rRa_2_VWC_Oct24_pwr <- wc_avg(wc_rRa_2_Oct24$VWC, 25)
+
+# csv output
+write.csv(rRa_2_GPP_Oct24_pwr$df, paste0(dir_res2_pwr, "rRa_GPP_Oct24.csv"), row.names = F)
+write.csv(rRa_2_PAR_Oct24_pwr$df, paste0(dir_res2_pwr, "rRa_PAR_Oct24.csv"), row.names = F)
+write.csv(rRa_2_Ts_Oct24_pwr$df, paste0(dir_res2_pwr, "rRa_Ts_Oct24.csv"), row.names = F)
+write.csv(rRa_2_VWC_Oct24_pwr$df, paste0(dir_res2_pwr, "rRa_VWC_Oct24.csv"), row.names = F)
+
+
+# extracting diurnal angle & power patterns from heatmap
+wc_rRa_2_Oct24_diurnal_summary <- wc_result_summary(GPP_SR_Oct24_res2, "rRa", wc_rRa_2_Oct24)
+save_to_csv(wc_rRa_2_Oct24_diurnal_summary, dir_res2_diurnal, "wc_rRa_Oct24_")
+
+
+# viz
+ggarrange(
+  wc_lag_img(wc_rRa_2_Oct24_diurnal_summary$GPP, "GPP"),
+  wc_lag_img(wc_rRa_2_Oct24_diurnal_summary$PAR, "PAR"),
+  wc_lag_img(wc_rRa_2_Oct24_diurnal_summary$Ts, "Ts"),
+  wc_lag_img(wc_rRa_2_Oct24_diurnal_summary$VWC, "VWC"),
+  ncol = 2, nrow = 2, common.legend = T
+)
+
+```
+
+```{r WT Oct24}
+wt_rRh_2_Oct24 <- 
+  analyze.wavelet(wc_rRh_2_Oct24$PAR$series,"rRh", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+rRh_2_Oct24_pwr <- wt_avg(wt_rRh_2_Oct24, 25)
+write.csv(rRh_2_Oct24_pwr$df, paste0(dir_res2_pwr, "rRh_Oct24.csv"), row.names = F)
+
+wt.image(wt_rRh_2_Oct24,  
+         legend.params = 
+             list(
+                 lab = "wavelet power levels", # axis label
+                 lab.line = 1.5, # distance between bar label and axis label
+                 mar = 5
+             ), 
+         lvl = 0.3,
+         timelab = "",
+         show.date = T, 
+         date.format = "%Y-%m-%d %H:%M:%S",
+         periodlab = "period (days)",
+         main = "rRh"
+)
+
+# rRa
+wt_rRa_2_Oct24 <- 
+  analyze.wavelet(wc_rRa_2_Oct24$PAR$series,"rRa", 
+                  loess.span = 0,     ## no detrending required
+                  dt = 1/24,          ## defines the time unit --- there are 24 slots in a day! Time unit = 1 day
+                  dj = 1/100,         ## resolution along period axis
+                  lowerPeriod = 1/4,  ## 6 hour
+                  upperPeriod = 64,  ## 128 days
+                  make.pval = T,      ## check for significance
+                  n.sim = 10)         ## 10 white-noise simulations used for assessing significance )
+
+rRa_2_Oct24_pwr <- wt_avg(wt_rRa_2_Oct24, 25)
+write.csv(rRa_2_Oct24_pwr$df, paste0(dir_res2_pwr, "rRa_Oct24.csv"), row.names = F)
+
+wt.image(wt_rRa_2_Oct24,  
+         legend.params = 
+             list(
+                 lab = "wavelet power levels", # axis label
+                 lab.line = 1.5, # distance between bar label and axis label
+                 mar = 5
+             ), 
+         lvl = 0.3,
+         timelab = "",
+         show.date = T, 
+         date.format = "%Y-%m-%d %H:%M:%S",
+         periodlab = "period (days)",
+         main = "rRa"
+)
+```
+
