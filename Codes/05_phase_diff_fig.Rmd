@@ -18,22 +18,39 @@ library(purrr)
 library(patchwork)
 ```
 
-
-
 ```{r}
+setwd("G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_cospectral/")
+
 filenames_raw <- 
-  list.files("G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_cospectral/raw_64d_one_GPP/df_diurnal/", "*.csv", full.names = T)
+  list.files("raw_64d_one_GPP/df_diurnal/", "*.csv", full.names = T)
 
-filenames_res <- 
-  list.files("G:/My Drive/Research/Projects/DC_auto/Data/Nov2024_rerun/Re_result_pad_64d_res/df_diurnal/", "*.csv", full.names = T)
+filenames_raw_env <- 
+  list.files("raw_64d_one_GPP/df_diurnal_env/", "*.csv", full.names = T)
 
+filenames_res1 <- 
+  list.files("res_64d_one_GPP_hourly_dailyQ10/df_diurnal/", "*.csv", full.names = T)
 
-ts_raw_files <- grep("_Ts\\.csv", filenames_raw, value = TRUE)
-#par_res_files <- grep("_PAR\\.csv", filenames_res, value = TRUE)
-par_raw_files <- grep("_PAR\\.csv", filenames_raw, value = TRUE)
-gpp_raw_files <- grep("_GPP\\.csv", filenames_raw, value = TRUE)
+filenames_res2 <- 
+  list.files("res_64d_one_GPP_hourly_weeklyQ10/df_diurnal/", "*.csv", full.names = T)
+
+# for raw
+ts_raw_files <- grep("_Ts\\.csv", filenames_raw, value = T)
+par_raw_files <- grep("_PAR\\.csv", filenames_raw, value = T)
+gpp_raw_files <- grep("_GPP\\.csv", filenames_raw, value = T)
+
+# for raw env
+ts_raw_env_files <- grep("_Ts\\.csv", filenames_raw_env, value = T)
+
+# for res daily
+ts_res1_files <- grep("_Ts\\.csv", filenames_res1, value = T)
+par_res1_files <- grep("_PAR\\.csv", filenames_res1, value = T)
+gpp_res1_files <- grep("_GPP\\.csv", filenames_res1, value = T)
+
+# for res weekly
+ts_res2_files <- grep("_Ts\\.csv", filenames_res2, value = T)
+par_res2_files <- grep("_PAR\\.csv", filenames_res2, value = T)
+gpp_res2_files <- grep("_GPP\\.csv", filenames_res2, value = T)
 ```
-
 
 
 ```{r}
@@ -66,12 +83,27 @@ phase_diff_csv <- function(filename){
     ) 
 }
 
-# caliculate
+# calculate
+# for raw
 ts_raw_phase <- purrr::map_dfr(ts_raw_files, phase_diff_csv)
 par_raw_phase <- purrr::map_dfr(par_raw_files, phase_diff_csv)
 gpp_raw_phase <- purrr::map_dfr(gpp_raw_files, phase_diff_csv)
 
+# for raw env
+ts_raw_env_phase <- purrr::map_dfr(ts_raw_env_files, phase_diff_csv)
 
+# for res1
+ts_res1_phase <- purrr::map_dfr(ts_res1_files, phase_diff_csv)
+par_res1_phase <- purrr::map_dfr(par_res1_files, phase_diff_csv)
+gpp_res1_phase <- purrr::map_dfr(gpp_res1_files, phase_diff_csv)
+
+# for res2
+ts_res2_phase <- purrr::map_dfr(ts_res2_files, phase_diff_csv)
+par_res2_phase <- purrr::map_dfr(par_res2_files, phase_diff_csv)
+gpp_res2_phase <- purrr::map_dfr(gpp_res2_files, phase_diff_csv)
+
+
+# vars order
 campaign <- c("MJ22" = "C1", "MA23" = "C2", "Mar24" = "C3", 
               "Apr24" = "C4", "Sep24" = "C5", "Oct24" = "C6")
 season_mo <- c("MJ22" = "Growing", "MA23" = "Dormant", "Mar24" = "Dormant", 
@@ -79,28 +111,40 @@ season_mo <- c("MJ22" = "Growing", "MA23" = "Dormant", "Mar24" = "Dormant",
 
 
 # combined and save
+# for raw & raw env
 phase_raw_combined <- 
-  rbind(ts_raw_phase, par_raw_phase, gpp_raw_phase) %>% 
+  rbind(ts_raw_phase, par_raw_phase, gpp_raw_phase, ts_raw_env_phase) %>% 
   mutate(
     campaign = recode(month, !!!campaign),
     season = recode(month, !!!season_mo)
     ) %>% 
   arrange(resp, driver, campaign)
 
-write.csv(phase_raw_combined, "G:/My Drive/Research/Projects/DC_auto/Data/Result/GPP_SR_cospectral/raw_64d_one_GPP/df_lag_hr/phase_raw_combined.csv", row.names = F)
+write.csv(phase_raw_combined, "raw_64d_one_GPP/df_lag_hr/phase_raw_combined.csv", row.names = F)
 
 
+# for res1
+phase_res1_combined <- 
+  rbind(ts_res1_phase, par_res1_phase, gpp_res1_phase) %>% 
+  mutate(
+    campaign = recode(month, !!!campaign),
+    season = recode(month, !!!season_mo)
+    ) %>% 
+  arrange(resp, driver, campaign)
+
+write.csv(phase_res1_combined, "res_64d_one_GPP_hourly_dailyQ10/df_lag_hr/phase_res1_combined.csv", row.names = F)
 
 
+# for res2
+phase_res2_combined <- 
+  rbind(ts_res2_phase, par_res2_phase, gpp_res2_phase) %>% 
+  mutate(
+    campaign = recode(month, !!!campaign),
+    season = recode(month, !!!season_mo)
+    ) %>% 
+  arrange(resp, driver, campaign)
 
-ts_phase <- 
-  ts_phase %>%
-  mutate(campaign_num = recode(campaign, !!!campaign))
-
-
-#par_res_phase <- purrr::map_dfr(par_res_files, phase_diff_csv)
-
-
+write.csv(phase_res2_combined, "res_64d_one_GPP_hourly_weeklyQ10/df_lag_hr/phase_res2_combined.csv", row.names = F)
 ```
 
 
@@ -136,7 +180,7 @@ phase_diff_graph <- function(df, res, driver_var){
         )
 }
 
-
+# for raw
 # run each case
 p_Rh_PAR <- phase_diff_graph(phase_raw_combined, "Rh", "PAR")
 p_Ra_PAR <- phase_diff_graph(phase_raw_combined, "Ra", "PAR")
@@ -164,8 +208,60 @@ combined_plot <-
 #         plot.tag.position = "left"
 #     )
 
-# res
-phase_diff_graph(par_res_phase_cam, "rRh", "PAR")
-phase_diff_graph(par_res_phase_cam, "rRa", "PAR")
+## for raw env
+# run each case
+p_GPP_Ts <- phase_diff_graph(phase_raw_combined, "GPP", "Ts") + ylim(0, 8)
+p_PAR_Ts <- phase_diff_graph(phase_raw_combined, "PAR", "Ts") + ylim(0, 8)
 
+
+# patchwork
+(p_GPP_Ts + p_PAR_Ts) +
+  # common legend
+  plot_layout(guides = "collect") & 
+  theme(
+    legend.position = "bottom",
+    legend.text = element_text(size = 13)) & 
+  ylab(NULL)
+
+
+# for res1
+# run each case
+p_res1_rRh_PAR <- phase_diff_graph(phase_res1_combined, "rRh", "PAR") + ylim(-10, 10)
+p_res1_rRa_PAR <- phase_diff_graph(phase_res1_combined, "rRa", "PAR") + ylim(-10, 10)
+
+p_res1_rRh_Ts <- phase_diff_graph(phase_res1_combined, "rRh", "Ts") + ylim(-10, 10)
+p_res1_rRa_Ts <- phase_diff_graph(phase_res1_combined, "rRa", "Ts") + ylim(-10, 10)
+
+p_res1_rRh_GPP <- phase_diff_graph(phase_res1_combined, "rRh", "GPP") + ylim(-10, 10)
+p_res1_rRa_GPP <- phase_diff_graph(phase_res1_combined, "rRa", "GPP") + ylim(-10, 10)
+
+# patchwork
+(p_res1_rRh_GPP + p_res1_rRh_PAR + p_res1_rRh_Ts) / (p_res1_rRa_GPP + p_res1_rRa_PAR + p_res1_rRa_Ts) +
+  # common legend
+  plot_layout(guides = "collect") & 
+  theme(
+    legend.position = "bottom",
+    legend.text = element_text(size = 13)) & 
+  ylab(NULL)
+
+
+# for res2
+# run each case
+p_res2_rRh_PAR <- phase_diff_graph(phase_res2_combined, "rRh", "PAR") + ylim(-10, 10)
+p_res2_rRa_PAR <- phase_diff_graph(phase_res2_combined, "rRa", "PAR") + ylim(-10, 10)
+
+p_res2_rRh_Ts <- phase_diff_graph(phase_res2_combined, "rRh", "Ts") + ylim(-10, 10)
+p_res2_rRa_Ts <- phase_diff_graph(phase_res2_combined, "rRa", "Ts") + ylim(-10, 10)
+
+p_res2_rRh_GPP <- phase_diff_graph(phase_res2_combined, "rRh", "GPP") + ylim(-10, 10)
+p_res2_rRa_GPP <- phase_diff_graph(phase_res2_combined, "rRa", "GPP") + ylim(-10, 10)
+
+# patchwork
+(p_res2_rRh_GPP + p_res2_rRh_PAR + p_res2_rRh_Ts) / (p_res2_rRa_GPP + p_res2_rRa_PAR + p_res2_rRa_Ts) +
+  # common legend
+  plot_layout(guides = "collect") & 
+  theme(
+    legend.position = "bottom",
+    legend.text = element_text(size = 13)) & 
+  ylab(NULL)
 ```
