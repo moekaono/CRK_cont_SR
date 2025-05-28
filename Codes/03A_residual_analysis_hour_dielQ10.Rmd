@@ -53,7 +53,6 @@ daily_q10 <- function(df, SR_col, Rh_col, Ra_col){
     rename("Rh" = !!sym(Rh_col)) %>%
     rename("Ra" = !!sym(Ra_col)) 
 
-  
   # for SR
   df_SR <- 
     df1 %>%
