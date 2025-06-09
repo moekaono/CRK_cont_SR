@@ -81,16 +81,23 @@ line_subset <- c("0-5", "5-10", "10-15", "15-20", "20-25", "25-30")
 
 
 # plot altogether
-root_long <- root_stat %>%
+root_long <- 
+  root_stat %>%
   select(Depth, LF_mean, LF_sd, DF_mean, DF_sd, FRB_mean, FRB_sd) %>%
   tidyr::pivot_longer(
     cols = -Depth,
     names_to = c("Type", ".value"),
     names_pattern = "(.*)_([a-z]+)"
-  )
+  ) %>% 
+  mutate(Type_full = 
+           case_when(
+             Type == "LF" ~ "Live",
+             Type == "DF" ~ "Dead",
+             Type == "FRB" ~ "Total"
+             ))
 
 # Reorder factor levels for plotting
-root_long$Type <- factor(root_long$Type, levels = c("LF", "DF", "FRB"))
+root_long$Type_full <- factor(root_long$Type_full, levels = c("Live", "Dead", "Total"))
 root_long$Depth <- factor(root_long$Depth, levels = levels(root_stat$Depth))  # keep depth order
 
 
@@ -100,24 +107,28 @@ root_plt_theme <-
     axis.text.x = element_text(size = 25),
     axis.title.y = element_text(size = 25), 
     axis.text.y = element_text(size = 25),
-    legend.title = element_text(size = 25), 
+    legend.title = element_blank(), 
     legend.text = element_text(size = 25),
+    legend.position = "inside",
+    legend.position.inside = c(0.8, 0.1),
     panel.border = element_rect(colour = "black", fill = NA, linewidth = 1)
   )
+
+theme() 
 
 # Set dodge to avoid overlapping
 pd <- position_dodge(width = 0.15)
 
-ggplot(root_long, aes(x = Depth, y = mean, color = Type, shape = Type, linetype = Type)) +
+ggplot(root_long, aes(x = Depth, y = mean, color = Type_full, shape = Type_full, linetype = Type_full)) +
   geom_point(position = pd, size = 3) +
   geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width = 0.2, position = pd) +
   geom_line(data = filter(root_long, Depth %in% line_subset),
-            aes(group = Type), position = pd, linewidth = 1) +
+            aes(group = Type_full), position = pd, linewidth = 1) +
   scale_linetype_manual(values = c("dashed", "dotdash", "solid")) +  # Solid for FRB
   scale_shape_manual(values = c(16, 17, 15)) +  # Different shapes
   scale_color_manual(values = c("#20A39E", "darkorange", "black")) +  # Custom colors
   coord_flip() +
-  labs(y = "Mass (g)", x = "Soil Depth (cm)", color = "Root Type", shape = "Root Type", linetype = "Root Type") +
+  labs(y = "Root biomass (g)", x = "Soil Depth (cm)", color = "Root Type", shape = "Root Type", linetype = "Root Type") +
   theme_classic() +
   root_plt_theme
 
