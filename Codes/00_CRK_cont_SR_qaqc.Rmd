@@ -165,7 +165,7 @@ Deep collar installation
 ```{r plot}
 # boxplot after applying 3 variables
 SR_cont_v1 %>% 
-  filter(R2 > .985 & CV < 1.25 & V1_IV > 2 & Flux > 0) %>%
+  filter(R2 > .975 & CV < 1.25 & V1_IV > 2 & Flux > 0) %>%
   ggplot() + 
   geom_boxplot(aes(as.character(Collar), Flux)) + 
   theme_bw()
@@ -173,7 +173,7 @@ SR_cont_v1 %>%
 
 # time series
 SR_cont_v1 %>% 
-  filter(R2 > .985 & CV < 1.25 & V1_IV > 2 & Flux > 0) %>% 
+  filter(R2 > .975 & CV < 1.9 & V1_IV > 2 & Flux > 0) %>% 
   ggplot() + 
   geom_point(aes(Datetime_CST, Flux, col = Collar)) +
   # deep collar insertion
@@ -227,7 +227,7 @@ cont_qaqc <-
   # Remove bad sh3 data 
   filter(!(Collar == "sh3" & Datetime_CST > "2024-01-01 01:00:00" & Datetime_CST < "2024-06-05 00:00:00")) %>% 
   # Remove bad data after collar insertion in June 2024
-  filter(!(Datetime_CST > "2024-06-14 01:00:00" & Datetime_CST < "2024-07-05 00:00:00")) %>% 
+  #filter(!(Datetime_CST > "2024-06-14 01:00:00" & Datetime_CST < "2024-07-05 00:00:00")) %>% 
   # Remove expired deep data
   #filter(!(Collar == "deep" & Datetime_CST > "2022-06-15 01:00:00" & Datetime_CST < "2023-03-10 00:00:00")) %>% 
   # Remove too-early deep data
