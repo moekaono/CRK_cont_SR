@@ -6,7 +6,7 @@ output: html_document
 ---
 
 ```{r read df}
-setwd("G:/My Drive/Research/Projects/DC_auto/Data/GPP_SR_combined")
+setwd("G:/My Drive/Research/Projects/CRK_auto/Data/GPP_SR_combined")
 
 GPP_SR_combined_2022_2024 <- 
   read.csv("GPP_SR_combined_2022_2024.csv") %>% 
@@ -217,8 +217,40 @@ p_PAR <- EC_plt_fnc(PPFD_IN_1_1_1) + xlab("") + ylab("PAR (µmol m⁻² s⁻¹)"
 p_Ts <- EC_plt_fnc(TS_1_1_1) + xlab("") + ylab(expression(T[s]~(degree*C))) 
 p_VWC <- EC_plt_fnc(SWC_1_1_1) + xlab("") + ylab("VWC (%)") + theme(axis.text.x = element_text(size = 20))
 
+p_Ts2 <- 
+  GPP_SR_combined_2022_2024 %>%
+  ggplot() +
+  geom_rect(
+    data = shaded_periods,
+    aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf),
+    fill = shaded_periods$fill_color,  # direct color assignment
+    inherit.aes = FALSE,
+    alpha = 0.3
+    ) +
+  geom_point(aes(Datetime_hr_CST, TS_1_1_1), alpha = 0.6, col = "#1f78b4") +
+  geom_point(aes(Datetime_hr_CST, TS_1_2_1), alpha = 0.3, col = "#4d4d4d") +
+  ylab(expression(T[s]~(degree*C))) +
+  theme_classic() +
+  theme_template
+
+p_VWC2 <- 
+  GPP_SR_combined_2022_2024 %>%
+  ggplot() +
+  geom_rect(
+    data = shaded_periods,
+    aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf),
+    fill = shaded_periods$fill_color,  # direct color assignment
+    inherit.aes = FALSE,
+    alpha = 0.3
+    ) +
+  geom_point(aes(Datetime_hr_CST, SWC_1_2_1), alpha = 0.3, col = "#4d4d4d") +
+  geom_point(aes(Datetime_hr_CST, SWC_1_1_1), alpha = 0.6, col = "#1f78b4") +
+  ylab("VWC (%)") + 
+  theme_classic() +
+  theme_template +
+  theme(axis.text.x = element_text(size = 20))
 
 
-cowplot::plot_grid(p_GPP, p_PAR, p_Ts, p_VWC, ncol = 1, align = "hv", axis = "tblr")
+cowplot::plot_grid(p_GPP, p_PAR, p_Ts2, p_VWC2, ncol = 1, align = "hv", axis = "tblr")
 ```
 
